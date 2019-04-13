@@ -7,6 +7,7 @@ import logging
 import cv2
 import numpy as np
 from lib.model.masks import dfl_full
+from lib.color_transfer import moment_matching_in_L_alpha_beta
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -205,9 +206,13 @@ class Convert():
 
     def color_hist_match(self, new, frame, img_mask):
         """ Match the histogram of the color intensity of each channel """
+        
+        matcher = moment_matching_in_L_alpha_beta(quick=False)
+        new = matcher.color_match(new, frame, img_mask)
+        """
         np.clip(new, 0.0, 255.0, out=new)
         new = np.stack((self.hist_match(new[:, :, c], frame[:, :, c], img_mask[:, :, c]) for c in [0, 1, 2]), axis=-1)
-
+        """
         return new
 
     @staticmethod
