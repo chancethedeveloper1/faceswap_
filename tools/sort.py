@@ -47,7 +47,7 @@ class Sort():
 
         # Assigning default threshold values based on grouping method
         if (self.args.final_process == "folders"
-                and self.args.min_threshold == -1.0):
+                and self.args.min_threshold < 0.0):
             method = self.args.group_method.lower()
             if method == 'face':
                 self.args.min_threshold = 0.6
@@ -81,15 +81,14 @@ class Sort():
 
         self.sort_process()
 
-    @staticmethod
-    def launch_aligner():
+    def launch_aligner(self):
         """ Load the aligner plugin to retrieve landmarks """
         out_queue = queue_manager.get_queue("out")
         kwargs = {"in_queue": queue_manager.get_queue("in"),
                   "out_queue": out_queue}
 
         for plugin in ("fan", "dlib"):
-            aligner = PluginLoader.get_aligner(plugin)()
+            aligner = PluginLoader.get_aligner(plugin)(loglevel=self.args.loglevel)
             process = SpawnProcess(aligner.run, **kwargs)
             event = process.event
             process.start()
@@ -123,15 +122,18 @@ class Sort():
         """ Set the image to a dict for alignment """
         height, width = image.shape[:2]
         face = DetectedFace(x=0, w=width, y=0, h=height)
+        face = face.to_dlib_rect()
         return {"image": image,
                 "detected_faces": [face]}
 
-    def get_landmarks(self, filename):
-        """ Get landmarks for current image """
+    @staticmethod
+    def get_landmarks(filename):
+        """ Extract the face from a frame (If not alignments file found) """
         image = cv2.imread(filename)
-        queue_manager.get_queue("in").put(self.alignment_dict(image))
+        queue_manager.get_queue("in").put(Sort.alignment_dict(image))
         face = queue_manager.get_queue("out").get()
-        return face["detected_faces"][0].landmarksXY
+        landmarks = face["landmarks"][0]
+        return landmarks
 
     def sort_process(self):
         """
@@ -162,7 +164,7 @@ class Sort():
         input_dir = self.args.input_dir
 
         logger.info("Sorting by blur...")
-        img_list = [[img, self.estimate_blur(cv2.imread(img))]
+        img_list = [[img, self.estimate_blur(img)]
                     for img in
                     tqdm(self.find_images(input_dir),
                          desc="Loading",
@@ -231,6 +233,7 @@ class Sort():
                         [img_list[i][1]],
                         [img_list[j][1]])
                 except:
+                    logger.info("except")
                     pass
 
             img_list[i][2] = score_total
@@ -756,13 +759,18 @@ class Sort():
         return result
 
     @staticmethod
-    def estimate_blur(image):
-        """ Estimate the amount of blur an image has """
+    def estimate_blur(image_file):
+        """
+        Estimate the amount of blur an image has
+        with the variance of the Laplacian.
+        Normalize by pixel number to offset the effect
+        of image size on pixel gradients & variance
+        """
+        image = cv2.imread(image_file)
         if image.ndim == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        blur_map = cv2.Laplacian(image, cv2.CV_64F)
-        score = np.var(blur_map)
+        blur_map = cv2.Laplacian(image, cv2.CV_32F)
+        score = np.var(blur_map) / np.sqrt(image.shape[0] * image.shape[1])
         return score
 
     @staticmethod
@@ -809,13 +817,13 @@ class Sort():
 
         else:
             if keep_original:
-                def process_file(src, dst, changes):
+                def process_file(src, dst, changes):  # pylint: disable=unused-argument
                     """ Process file method if not logging changes
                         and keeping original """
                     copyfile(src, dst)
 
             else:
-                def process_file(src, dst, changes):
+                def process_file(src, dst, changes):  # pylint: disable=unused-argument
                     """ Process file method if not logging changes
                         and not keeping original """
                     os.rename(src, dst)
@@ -837,7 +845,7 @@ class Sort():
                 changes[src] = dst
                 return __src, dst
         else:
-            def renaming(src, output_dir, i, changes):
+            def renaming(src, output_dir, i, changes):  # pylint: disable=unused-argument
                 """ Rename files method if not logging changes """
                 src_basename = os.path.basename(src)
 
@@ -880,17 +888,17 @@ class Sort():
         return sum(scores) / len(scores)
 
 
-def bad_args(args):
+def bad_args(args):  # pylint: disable=unused-argument
     """ Print help on bad arguments """
     PARSER.print_help()
     exit(0)
 
 
 if __name__ == "__main__":
-    __warning_string = "Important: face-cnn method will cause an error when "
-    __warning_string += "this tool is called directly instead of through the "
-    __warning_string += "tools.py command script."
-    print(__warning_string)
+    __WARNING_STRING = "Important: face-cnn method will cause an error when "
+    __WARNING_STRING += "this tool is called directly instead of through the "
+    __WARNING_STRING += "tools.py command script."
+    print(__WARNING_STRING)
     print("Images sort tool.\n")
 
     PARSER = FullHelpArgumentParser()
