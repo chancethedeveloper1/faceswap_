@@ -117,7 +117,9 @@ class Analysis(DisplayPage):  # pylint: disable=too-many-ancestors
         session = get_config().session
         if not session.initialized:
             logger.debug("Training not running")
-            print("Training not running")
+            return
+        if session.logging_disabled:
+            logger.trace("Logging disabled. Not triggering analysis update")
             return
         msg = "Currently running training session"
         self.session = session
@@ -153,10 +155,14 @@ class Analysis(DisplayPage):  # pylint: disable=too-many-ancestors
     def clear_session(self):
         """ Clear sessions stats """
         logger.debug("Clearing session")
+        if self.session is None:
+            logger.trace("No session loaded. Returning")
+            return
         self.summary = None
         self.stats.session = None
         self.stats.tree_clear()
         self.reset_session_info()
+        self.session = None
 
     def save_session(self):
         """ Save sessions stats to csv """
