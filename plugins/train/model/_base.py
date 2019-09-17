@@ -20,7 +20,8 @@ from keras.utils import get_custom_objects, multi_gpu_model
 
 from lib import Serializer
 from lib.model.backup_restore import Backup
-from lib.model.losses import DSSIMObjective, PenalizedLoss
+from lib.model.losses import (DSSIMObjective, PenalizedLoss, gradient_loss, mask_loss_wrapper,
+                              generalized_loss, l_inf_norm, gmsd_loss, gaussian_blur)
 from lib.model.nn_blocks import NNBlocks
 from lib.model.optimizers import Adam
 from lib.multithreading import MultiThread
@@ -35,7 +36,7 @@ class ModelBase():
     """ Base class that all models should inherit from """
     def __init__(self,
                  model_dir,
-                 gpus,
+                 gpus=1,
                  configfile=None,
                  snapshot_interval=0,
                  no_logs=False,
@@ -169,7 +170,6 @@ class ModelBase():
         for predictor in self.predictors.values():
             out.extend([K.int_shape(output)[-3:] for output in predictor.outputs])
             break  # Only get output from one autoencoder. Shapes are the same
-        # Only return the output shape of the face
         return [tuple(shape) for shape in out]
 
     @property
@@ -264,6 +264,7 @@ class ModelBase():
         mask_idx = [idx for idx, name in enumerate(output_network.output_names)
                     if name.startswith("mask")]
         if mask_idx:
+            # Add the final mask shape as input
             mask_shape = output_network.output_shapes[mask_idx[0]]
             inputs.append(Input(shape=mask_shape[1:], name="mask_in"))
         logger.debug("Got inputs: %s", inputs)
@@ -362,8 +363,7 @@ class ModelBase():
         optimizer = self.get_optimizer(lr=learning_rate, beta_1=0.5, beta_2=0.999)
 
         for side, model in self.predictors.items():
-            mask_input = [inp for inp in model.inputs if inp.name.startswith("mask")]
-            loss = Loss(side, model.outputs, mask_input, self.predict)
+            loss = Loss(model.inputs, model.outputs)
             model.compile(optimizer=optimizer, loss=loss.funcs)
             if initialize:
                 self.state.add_session_loss_names(side, loss.names)
@@ -388,10 +388,8 @@ class ModelBase():
     def converter(self, swap):
         """ Converter for autoencoder models """
         logger.debug("Getting Converter: (swap: %s)", swap)
-        if swap:
-            model = self.predictors["a"]
-        else:
-            model = self.predictors["b"]
+        side = "a" if swap else "b"
+        model = self.predictors[side]
         if self.predict:
             # Must compile the model to be thread safe
             model._make_predict_function()  # pylint: disable=protected-access
@@ -649,15 +647,29 @@ class VRAMSavings():
 
 class Loss():
     """ Holds loss names and functions for an Autoencoder """
-    def __init__(self, side, outputs, mask_input, predict):
-        logger.debug("Initializing %s: (side: '%s', outputs: '%s', mask_input: '%s', predict: %s",
-                     self.__class__.__name__, side, outputs, mask_input, predict)
+    def __init__(self, inputs, outputs):
+        logger.debug("Initializing %s: (inputs: %s, outputs: %s)",
+                     self.__class__.__name__, inputs, outputs)
+        self.inputs = inputs
         self.outputs = outputs
         self.names = self.get_loss_names()
-        self.funcs = self.get_loss_functions(side, predict, mask_input)
+        self.funcs = self.get_loss_functions()
         if len(self.names) > 1:
             self.names.insert(0, "total_loss")
         logger.debug("Initialized: %s", self.__class__.__name__)
+
+    @property
+    def loss_dict(self):
+        """ Return the loss dict """
+        loss_dict = dict(mae=losses.mean_absolute_error,
+                         mse=losses.mean_squared_error,
+                         logcosh=losses.logcosh,
+                         smooth_l=generalized_loss,
+                         l_inf_norm=l_inf_norm,
+                         ssim=DSSIMObjective(),
+                         gmsd=gmsd_loss,
+                         pixel_gradient_diff=gradient_loss)
+        return loss_dict
 
     @property
     def config(self):
@@ -665,17 +677,51 @@ class Loss():
         return _CONFIG
 
     @property
-    def loss_shapes(self):
+    def mask_preprocessing_func(self):
+        """ The selected pre-processing function for the mask """
+        retval = None
+        if self.config.get("mask_blur", False):
+            retval = gaussian_blur(max(1, self.mask_shape[1] // 32))
+        logger.debug(retval)
+        return retval
+
+    @property
+    def selected_loss(self):
+        """ Return the selected loss function """
+        retval = self.loss_dict[self.config.get("loss_function", "mae")]
+        logger.debug(retval)
+        return retval
+
+    @property
+    def selected_mask_loss(self):
+        """ Return the selected mask loss function. Currently returns mse
+            If a processing function has been requested wrap the loss function
+            in loss wrapper """
+        loss_func = self.loss_dict["mse"]
+        func = self.mask_preprocessing_func
+        logger.debug("loss_func: %s, func: %s", loss_func, func)
+        retval = mask_loss_wrapper(loss_func, preprocessing_func=func)
+        return retval
+
+    @property
+    def output_shapes(self):
         """ The shapes of the output nodes """
         return [K.int_shape(output)[1:] for output in self.outputs]
 
     @property
-    def largest_output(self):
-        """ Return the index of the largest face output """
-        max_size = max(shape[0] for shape in self.loss_shapes if shape[2] == 3)
-        largest_idx = [idx for idx, shape in enumerate(self.loss_shapes)
-                       if shape[0] == max_size and shape[2] == 3][0]
-        return largest_idx
+    def mask_input(self):
+        """ Return the mask input or None """
+        mask_inputs = [inp for inp in self.inputs if inp.name.startswith("mask")]
+        if not mask_inputs:
+            return None
+        return mask_inputs[0]
+
+    @property
+    def mask_shape(self):
+        """ Return the mask shape """
+        if self.mask_input is None:
+            return None
+        return K.int_shape(self.mask_input)[1:]
 
     def get_loss_names(self):
         """ Return the loss names based on model output """
@@ -693,41 +739,31 @@ class Loss():
 
     def update_loss_names(self):
         """ Update loss names if named incorrectly or legacy model """
-        output_types = ["mask" if shape[-1] == 1 else "face" for shape in self.loss_shapes]
+        output_types = ["mask" if shape[-1] == 1 else "face" for shape in self.output_shapes]
         loss_names = ["{}{}".format(name,
                                     "" if output_types.count(name) == 1 else "_{}".format(idx))
                       for idx, name in enumerate(output_types)]
         logger.debug("Renamed loss names to: %s", loss_names)
         return loss_names
 
-    def get_loss_functions(self, side, predict, mask):
+    def get_loss_functions(self):
         """ Set the loss function """
-        loss_funcs = list()
-        largest_face = self.largest_output
-
-        if self.config.get("dssim_loss", False):
-            if not predict and side.lower() == "a":
-                logger.verbose("Using DSSIM Loss")
-            loss_func = DSSIMObjective()
-        else:
-            loss_func = losses.mean_absolute_error
-            if not predict and side.lower() == "a":
-                logger.verbose("Using Mean Absolute Error Loss")
-
+        loss_funcs = []
         for idx, loss_name in enumerate(self.names):
             if loss_name.startswith("mask"):
-                mask_func = losses.mean_squared_error
-                loss_funcs.append(mask_func)
-                logger.debug("mask loss: %s", mask_func)
-            elif mask and idx == largest_face and self.config.get("penalized_mask_loss", False):
-                face_func = PenalizedLoss(mask[0], loss_func)
-                logger.debug("final face loss: %s", face_func)
-                loss_funcs.append(face_func)
-                if not predict and side.lower() == "a":
-                    logger.verbose("Penalizing mask for Loss")
+                loss_funcs.append(self.selected_mask_loss)
+            elif self.mask_input is not None and self.config.get("penalized_mask_loss", False):
+                face_size = self.output_shapes[idx][1]
+                mask_size = self.mask_shape[1]
+                scaling = face_size / mask_size
+                logger.debug("face_size: %s mask_size: %s, mask_scaling: %s",
+                             face_size, mask_size, scaling)
+                loss_funcs.append(PenalizedLoss(self.mask_input, self.selected_loss,
+                                                mask_scaling=scaling,
+                                                preprocessing_func=self.mask_preprocessing_func))
             else:
-                logger.debug("face loss func: %s", loss_func)
-                loss_funcs.append(loss_func)
+                loss_funcs.append(self.selected_loss)
+            logger.debug("%s: %s", loss_name, loss_funcs[-1])
         logger.debug(loss_funcs)
         return loss_funcs
 
@@ -966,11 +1002,27 @@ class State():
             if key not in self.config.keys():
                 logger.info("Adding new config item to state file: '%s': '%s'", key, val)
                 self.config[key] = val
+        legacy_update = self.update_legacy_config()
         self.update_changed_config_items(config_changeable_items)
         logger.debug("Replacing config. Old config: %s", _CONFIG)
         _CONFIG = self.config
+        if legacy_update:
+            self.save()
         logger.debug("Replaced config. New config: %s", _CONFIG)
         logger.info("Using configuration saved in state file")
+
+    def update_legacy_config(self):
+        """ Update legacy state config files with the new loss formating
+        """
+        prior = "dssim_loss"
+        new = "loss_function"
+        if prior not in self.config:
+            return False
+        self.config[new] = "ssim" if self.config[prior] else "mae"
+        del self.config[prior]
+        logger.info("Updated config from older dssim format. New config loss function: %s",
+                    self.config[new])
+        return True
 
     def update_changed_config_items(self, config_changeable_items):
         """ Update any parameters which are not fixed and have been changed """

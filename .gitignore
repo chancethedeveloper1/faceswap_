@@ -7,12 +7,15 @@
 !*.nsi
 !*.png
 !*.py
+!*.rst
 !*.txt
 !.cache
 !Dockerfile*
 !requirements*
 !.install/
 !.install/windows
+!docs
+!docs/full
 !config/
 !lib/
 !lib/*
@@ -27,6 +30,7 @@
 !plugins/convert/*
 !tools
 !tools/lib*
+!.travis.yml
 *.ini
 *.pyc
 __pycache__/

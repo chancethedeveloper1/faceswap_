@@ -1,17 +1,21 @@
 #!/usr/bin python3
 """ Utilities available across all scripts """
 
+import json
 import logging
 import os
+import subprocess
 import sys
 import urllib
 import warnings
 import zipfile
-from socket import timeout as socket_timeout, error as socket_error
-
 from hashlib import sha1
 from pathlib import Path
 from re import finditer
+from multiprocessing import current_process
+from socket import timeout as socket_timeout, error as socket_error
+
+import imageio_ffmpeg as im_ffm
 from tqdm import tqdm
 
 import numpy as np
@@ -26,6 +30,69 @@ _image_extensions = [  # pylint:disable=invalid-name
     ".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"]
 _video_extensions = [  # pylint:disable=invalid-name
     ".avi", ".flv", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"]
+
+
+class Backend():
+    """ Return the backend from config/.faceswap
+        if file doesn't exist, create it """
+    def __init__(self):
+        self.backends = {"1": "amd", "2": "cpu", "3": "nvidia"}
+        self.config_file = self.get_config_file()
+        self.backend = self.get_backend()
+
+    @staticmethod
+    def get_config_file():
+        """ Return location of config file """
+        pypath = os.path.dirname(os.path.realpath(sys.argv[0]))
+        config_file = os.path.join(pypath, "config", ".faceswap")
+        return config_file
+
+    def get_backend(self):
+        """ Return the backend from config/.faceswap """
+        # Intercept for sphinx docs build
+        if sys.argv[0].endswith("sphinx-build"):
+            return "nvidia"
+        if not os.path.isfile(self.config_file):
+            self.configure_backend()
+        while True:
+            try:
+                with open(self.config_file, "r") as cnf:
+                    config = json.load(cnf)
+                break
+            except json.decoder.JSONDecodeError:
+                self.configure_backend()
+                continue
+        fs_backend = config.get("backend", None)
+        if fs_backend is None or fs_backend.lower() not in self.backends.values():
+            fs_backend = self.configure_backend()
+        if current_process().name == "MainProcess":
+            print("Setting Faceswap backend to {}".format(fs_backend.upper()))
+        return fs_backend.lower()
+
+    def configure_backend(self):
+        """ Configure the backend if config file doesn't exist or there is a
+            problem with the file """
+        print("First time configuration. Please select the required backend")
+        while True:
+            selection = input("1: AMD, 2: CPU, 3: NVIDIA: ")
+            if selection not in ("1", "2", "3"):
+                print("'{}' is not a valid selection. Please try again".format(selection))
+                continue
+            break
+        fs_backend = self.backends[selection].lower()
+        config = {"backend": fs_backend}
+        with open(self.config_file, "w") as cnf:
+            json.dump(config, cnf)
+        print("Faceswap config written to: {}".format(self.config_file))
+        return fs_backend
+
+
+_FS_BACKEND = Backend().backend
+
+
+def get_backend():
+    """ Return the faceswap backend """
+    return _FS_BACKEND
 
 
 def get_folder(path, make_folder=True):
@@ -140,6 +207,91 @@ def hash_encode_image(image, extension):
     return f_hash, img
 
 
+def convert_to_secs(*args):
+    """ converts a time to second. Either convert_to_secs(min, secs) or
+        convert_to_secs(hours, mins, secs). """
+    logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
+    logger.debug("from time: %s", args)
+    retval = 0.0
+    if len(args) == 1:
+        retval = float(args[0])
+    elif len(args) == 2:
+        retval = 60 * float(args[0]) + float(args[1])
+    elif len(args) == 3:
+        retval = 3600 * float(args[0]) + 60 * float(args[1]) + float(args[2])
+    logger.debug("to secs: %s", retval)
+    return retval
+
+
+def count_frames_and_secs(path, timeout=15):
+    """
+    Adapted From ffmpeg_imageio, to handle occasional hanging issue:
+    https://github.com/imageio/imageio-ffmpeg
+
+    Get the number of frames and number of seconds for the given video
+    file. Note that this operation can be quite slow for large files.
+
+    Disclaimer: I've seen this produce different results from actually reading
+    the frames with older versions of ffmpeg (2.x). Therefore I cannot say
+    with 100% certainty that the returned values are always exact.
+    """
+    # https://stackoverflow.com/questions/2017843/fetch-frame-count-with-ffmpeg
+
+    logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
+    assert isinstance(path, str), "Video path must be a string"
+    exe = im_ffm.get_ffmpeg_exe()
+    iswin = sys.platform.startswith("win")
+    logger.debug("iswin: '%s'", iswin)
+    cmd = [exe, "-i", path, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"]
+    logger.debug("FFMPEG Command: '%s'", " ".join(cmd))
+    attempts = 3
+    for attempt in range(attempts):
+        try:
+            logger.debug("attempt: %s of %s", attempt + 1, attempts)
+            out = subprocess.check_output(cmd,
+                                          stderr=subprocess.STDOUT,
+                                          shell=iswin,
+                                          timeout=timeout)
+            logger.debug("Succesfully communicated with FFMPEG")
+            break
+        except subprocess.CalledProcessError as err:
+            out = err.output.decode(errors="ignore")
+            raise RuntimeError("FFMEG call failed with {}:\n{}".format(err.returncode, out))
+        except subprocess.TimeoutExpired as err:
+            this_attempt = attempt + 1
+            if this_attempt == attempts:
+                msg = ("FFMPEG hung while attempting to obtain the frame count. "
+                       "Sometimes this issue resolves itself, so you can try running again. "
+                       "Otherwise use the Effmpeg Tool to extract the frames from your video into "
+                       "a folder, and then run the requested Faceswap process on that folder.")
+                raise FaceswapError(msg) from err
+            logger.warning("FFMPEG hung while attempting to obtain the frame count. "
+                           "Retrying %s of %s", this_attempt + 1, attempts)
+            continue
+
+    # Note that other than with the subprocess calls below, ffmpeg wont hang here.
+    # Worst case Python will stop/crash and ffmpeg will continue running until done.
+
+    nframes = nsecs = None
+    for line in reversed(out.splitlines()):
+        if not line.startswith(b"frame="):
+            continue
+        line = line.decode(errors="ignore")
+        logger.debug("frame line: '%s'", line)
+        idx = line.find("frame=")
+        if idx >= 0:
+            splitframes = line[idx:].split("=", 1)[-1].lstrip().split(" ", 1)[0].strip()
+            nframes = int(splitframes)
+        idx = line.find("time=")
+        if idx >= 0:
+            splittime = line[idx:].split("=", 1)[-1].lstrip().split(" ", 1)[0].strip()
+            nsecs = convert_to_secs(*splittime.split(":"))
+        logger.debug("nframes: %s, nsecs: %s", nframes, nsecs)
+        return nframes, nsecs
+
+    raise RuntimeError("Could not get number of frames")  # pragma: no cover
+
+
 def backup_file(directory, filename):
     """ Backup a given file by appending .bk to the end """
     logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
@@ -200,18 +352,18 @@ def rotate_landmarks(face, rotation_matrix):
     # pylint:disable=c-extension-no-member
     """ Rotate the landmarks and bounding box for faces
         found in rotated images.
-        Pass in a DetectedFace object, Alignments dict or bounding box dict
-        (as defined in lib/plugins/extract/detect/_base.py) """
+        Pass in a DetectedFace object or Alignments dict """
     logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
     logger.trace("Rotating landmarks: (rotation_matrix: %s, type(face): %s",
                  rotation_matrix, type(face))
+    rotated_landmarks = None
     # Detected Face Object
     if isinstance(face, DetectedFace):
         bounding_box = [[face.x, face.y],
                         [face.x + face.w, face.y],
                         [face.x + face.w, face.y + face.h],
                         [face.x, face.y + face.h]]
-        landmarks = face.landmarksXY
+        landmarks = face.landmarks_xy
 
     # Alignments Dict
     elif isinstance(face, dict) and "x" in face:
@@ -222,15 +374,7 @@ def rotate_landmarks(face, rotation_matrix):
                          face.get("y", 0) + face.get("h", 0)],
                         [face.get("x", 0),
                          face.get("y", 0) + face.get("h", 0)]]
-        landmarks = face.get("landmarksXY", list())
-
-    # Bounding Box Dict
-    elif isinstance(face, dict) and "left" in face:
-        bounding_box = [[face["left"], face["top"]],
-                        [face["right"], face["top"]],
-                        [face["right"], face["bottom"]],
-                        [face["left"], face["bottom"]]]
-        landmarks = list()
+        landmarks = face.get("landmarks_xy", list())
 
     else:
         raise ValueError("Unsupported face type")
@@ -266,16 +410,7 @@ def rotate_landmarks(face, rotation_matrix):
         face.r = 0
         if len(rotated) > 1:
             rotated_landmarks = [tuple(point) for point in rotated[1].tolist()]
-            face.landmarksXY = rotated_landmarks
-    elif isinstance(face, dict) and "x" in face:
-        face["x"] = int(pt_x)
-        face["y"] = int(pt_y)
-        face["w"] = int(width)
-        face["h"] = int(height)
-        face["r"] = 0
-        if len(rotated) > 1:
-            rotated_landmarks = [tuple(point) for point in rotated[1].tolist()]
-            face["landmarksXY"] = rotated_landmarks
+            face.landmarks_xy = rotated_landmarks
     else:
         face["left"] = int(pt_x)
         face["top"] = int(pt_y)
@@ -296,19 +431,14 @@ def camel_case_split(identifier):
     return [m.group(0) for m in matches]
 
 
-def safe_shutdown():
+def safe_shutdown(got_error=False):
     """ Close queues, threads and processes in event of crash """
     logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
     logger.debug("Safely shutting down")
     from lib.queue_manager import queue_manager
-    from lib.multithreading import terminate_processes
     queue_manager.terminate_queues()
-    terminate_processes()
     logger.debug("Cleanup complete. Shutting down queue manager and exiting")
-    queue_manager._log_queue.put(None)  # pylint:disable=protected-access
-    while not queue_manager._log_queue.empty():  # pylint:disable=protected-access
-        continue
-    queue_manager.manager.shutdown()
+    exit(1 if got_error else 0)
 
 
 class FaceswapError(Exception):

@@ -16,8 +16,7 @@ from tqdm import tqdm
 from lib.cli import FullHelpArgumentParser
 from lib import Serializer
 from lib.faces_detect import DetectedFace
-from lib.multithreading import SpawnProcess
-from lib.queue_manager import queue_manager, QueueEmpty
+from lib.queue_manager import queue_manager
 from lib.utils import cv2_read_img
 from lib.vgg_face2_keras import VGGFace2 as VGGFace
 from plugins.plugin_loader import PluginLoader
@@ -43,7 +42,8 @@ class Sort():
 
         # Set output dir to the same value as input dir
         # if the user didn't specify it.
-        if self.args.output_dir.lower() == "_output_dir":
+        if self.args.output_dir is None:
+            logger.verbose("No output directory provided. Using input dir as output dir.")
             self.args.output_dir = self.args.input_dir
 
         # Assigning default threshold values based on grouping method
@@ -84,17 +84,10 @@ class Sort():
 
         self.sort_process()
 
-    def launch_aligner(self):
+    @staticmethod
+    def launch_aligner():
         """ Load the aligner plugin to retrieve landmarks """
-        out_queue = queue_manager.get_queue("out")
-        kwargs = {"in_queue": queue_manager.get_queue("in"),
-                  "out_queue": out_queue}
-
-<<<<<<< HEAD
-        for plugin in ("fan", "dlib"):
-=======
         for plugin in ("fan", "cv2_dnn"):
->>>>>>> upstream/master
             aligner = PluginLoader.get_aligner(plugin)(loglevel=self.args.loglevel)
             process = SpawnProcess(aligner.run, **kwargs)
             event = process.event
@@ -123,31 +116,32 @@ class Sort():
                 break
             process.join()
             logger.error("Error initializing FAN. Trying CV2-DNN")
+        kwargs = dict(in_queue=queue_manager.get_queue("in"),
+                      out_queue=queue_manager.get_queue("out"),
+                      queue_size=8)
+        aligner = PluginLoader.get_aligner("fan")(normalize_method="hist")
+        aligner.batchsize = 1
+        aligner.initialize(**kwargs)
+        aligner.start()
 
     @staticmethod
     def alignment_dict(image):
         """ Set the image to a dict for alignment """
         height, width = image.shape[:2]
         face = DetectedFace(x=0, w=width, y=0, h=height)
-<<<<<<< HEAD
-        face = face.to_dlib_rect()
-=======
         face = face.to_bounding_box_dict()
->>>>>>> upstream/master
         return {"image": image,
                 "detected_faces": [face]}
 
     @staticmethod
     def get_landmarks(filename):
         """ Extract the face from a frame (If not alignments file found) """
-<<<<<<< HEAD
-        image = cv2.imread(filename)
-=======
         image = cv2_read_img(filename, raise_error=True)
->>>>>>> upstream/master
-        queue_manager.get_queue("in").put(Sort.alignment_dict(image))
+        feed = Sort.alignment_dict(image)
+        feed["filename"] = filename
+        queue_manager.get_queue("in").put(feed)
         face = queue_manager.get_queue("out").get()
-        landmarks = face["landmarks"][0]
+        landmarks = face["detected_faces"][0].landmarks_xy
         return landmarks
 
     def sort_process(self):
@@ -196,67 +190,6 @@ class Sort():
 
         logger.info("Sorting by face similarity...")
 
-<<<<<<< HEAD
-        img_list = [[img, face_recognition.face_encodings(cv2.imread(img))]
-                    for img in
-                    tqdm(self.find_images(input_dir),
-                         desc="Loading",
-                         file=sys.stdout)]
-
-        img_list_len = len(img_list)
-        for i in tqdm(range(0, img_list_len - 1),
-                      desc="Sorting",
-                      file=sys.stdout):
-            min_score = float("inf")
-            j_min_score = i + 1
-            for j in range(i + 1, len(img_list)):
-                f1encs = img_list[i][1]
-                f2encs = img_list[j][1]
-                if f1encs and f2encs:
-                    score = face_recognition.face_distance(f1encs[0],
-                                                           f2encs)[0]
-                else:
-                    score = float("inf")
-
-                if score < min_score:
-                    min_score = score
-                    j_min_score = j
-            (img_list[i + 1],
-             img_list[j_min_score]) = (img_list[j_min_score],
-                                       img_list[i + 1])
-        return img_list
-
-    def sort_face_dissim(self):
-        """ Sort by face dissimilarity """
-        input_dir = self.args.input_dir
-
-        logger.info("Sorting by face dissimilarity...")
-
-        img_list = [[img, face_recognition.face_encodings(cv2.imread(img)), 0]
-                    for img in
-                    tqdm(self.find_images(input_dir),
-                         desc="Loading",
-                         file=sys.stdout)]
-
-        img_list_len = len(img_list)
-        for i in tqdm(range(0, img_list_len), desc="Sorting", file=sys.stdout):
-            score_total = 0
-            for j in range(0, img_list_len):
-                if i == j:
-                    continue
-                try:
-                    score_total += face_recognition.face_distance(
-                        [img_list[i][1]],
-                        [img_list[j][1]])
-                except:
-                    logger.info("except")
-                    pass
-
-            img_list[i][2] = score_total
-
-        logger.info("Sorting...")
-        img_list = sorted(img_list, key=operator.itemgetter(2), reverse=True)
-=======
         images = np.array(self.find_images(input_dir))
         preds = np.array([self.vgg_face.predict(cv2_read_img(img, raise_error=True))
                           for img in tqdm(images, desc="loading", file=sys.stdout)])
@@ -264,7 +197,6 @@ class Sort():
                     "minutes...")
         indices = self.vgg_face.sorted_similarity(preds, method="ward")
         img_list = images[indices]
->>>>>>> upstream/master
         return img_list
 
     def sort_face_cnn(self):
@@ -727,19 +659,10 @@ class Sort():
     @staticmethod
     def estimate_blur(image_file):
         """
-<<<<<<< HEAD
-        Estimate the amount of blur an image has
-        with the variance of the Laplacian.
-        Normalize by pixel number to offset the effect
-        of image size on pixel gradients & variance
-        """
-        image = cv2.imread(image_file)
-=======
         Estimate the amount of blur an image has with the variance of the Laplacian.
         Normalize by pixel number to offset the effect of image size on pixel gradients & variance
         """
         image = cv2_read_img(image_file, raise_error=True)
->>>>>>> upstream/master
         if image.ndim == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blur_map = cv2.Laplacian(image, cv2.CV_32F)
