@@ -250,7 +250,13 @@ class Batcher():
         self.mask = None
 
         generator = self.load_generator()
-        self.feed = generator.minibatch_ab(images, batch_size, self.side)
+        self.image_file, self.mark_file, self.image_shape, self.mark_shape = generator.dataset_setup(images, side)
+        self.feed = generator.minibatch_ab(self.image_file,
+                                           self.mark_file,
+                                           self.image_shape,
+                                           self.mark_shape,
+                                           batch_size,
+                                           self.side)
 
         self.preview_feed = None
         self.timelapse_feed = None
@@ -323,7 +329,10 @@ class Batcher():
         preview_images = self.config.get("preview_images", 14)
         preview_images = min(max(preview_images, 2), 16)
         batchsize = min(len(self.images), preview_images)
-        self.preview_feed = self.load_generator().minibatch_ab(self.images,
+        self.preview_feed = self.load_generator().minibatch_ab(self.image_file,
+                                                               self.mark_file,
+                                                               self.image_shape,
+                                                               self.mark_shape,
                                                                batchsize,
                                                                self.side,
                                                                do_shuffle=True,
@@ -362,8 +371,13 @@ class Batcher():
         """ Set the timelapse dictionary """
         logger.debug("Setting timelapse feed: (side: '%s', input_images: '%s', batchsize: %s)",
                      self.side, images, batchsize)
-        self.timelapse_feed = self.load_generator().minibatch_ab(images[:batchsize],
-                                                                 batchsize, self.side,
+                     
+        self.timelapse_feed = self.load_generator().minibatch_ab(self.image_file,
+                                                                 self.mark_file,
+                                                                 self.image_shape,
+                                                                 self.mark_shape,
+                                                                 batchsize,
+                                                                 self.side,
                                                                  do_shuffle=False,
                                                                  is_timelapse=True)
         logger.debug("Set timelapse feed")

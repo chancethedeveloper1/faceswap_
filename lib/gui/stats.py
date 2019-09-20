@@ -277,7 +277,7 @@ class SessionsSummary():
                              "terminated during compilation")
                 return None
             iterations = self.session.get_iterations_for_session(sess_idx)
-            elapsed = ts_data["end_time"] - ts_data["start_time"]
+            elapsed = ts_data["end_time"] - ts_data["start_time"] + 0.00000000000001
             batchsize = self.session.total_batchsize.get(sess_idx, 0)
             compiled.append({"session": sess_idx,
                              "start": ts_data["start_time"],
@@ -306,7 +306,7 @@ class SessionsSummary():
     def total_stats(sessions_stats):
         """ Return total stats """
         logger.debug("Compiling Totals")
-        elapsed = 0
+        elapsed = 0.00000000000001
         examples = 0
         iterations = 0
         batchset = set()
@@ -321,6 +321,7 @@ class SessionsSummary():
             batchset.add(summary["batch"])
             iterations += summary["iterations"]
         batch = ",".join(str(bs) for bs in batchset)
+        print("rate:    ", rate, "elapsed:    ", elapsed)
         totals = {"session": "Total",
                   "start": starttime,
                   "end": endtime,

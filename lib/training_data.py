@@ -4,6 +4,7 @@
 import logging
 
 from hashlib import sha1
+from pathlib import Path
 from random import random, shuffle, choice
 
 import numpy as np
@@ -51,93 +52,6 @@ class TrainingDataGenerator():
         logger.debug("Mask class: %s", mask_class)
         return mask_class
 
-    def minibatch_ab(self, images, batchsize, side,
-                     do_shuffle=True, is_preview=False, is_timelapse=False):
-        """ Keep a queue filled to 8x Batch Size """
-        logger.debug("Queue batches: (image_count: %s, batchsize: %s, side: '%s', do_shuffle: %s, "
-                     "is_preview, %s, is_timelapse: %s)", len(images), batchsize, side, do_shuffle,
-                     is_preview, is_timelapse)
-        self.batchsize = batchsize
-        is_display = is_preview or is_timelapse
-        args = (images, side, is_display, do_shuffle, batchsize)
-        batcher = BackgroundGenerator(self.minibatch, thread_count=2, args=args)
-        return batcher.iterator()
-
-    def validate_samples(self, data):
-        """ Check the total number of images against batchsize and return
-            the total number of images """
-        length = len(data)
-        msg = ("Number of images is lower than batch-size (Note that too few "
-               "images may lead to bad training). # images: {}, "
-               "batch-size: {}".format(length, self.batchsize))
-        try:
-            assert length >= self.batchsize, msg
-        except AssertionError as err:
-            msg += ("\nYou should increase the number of images in your training set or lower "
-                    "your batch-size.")
-            raise FaceswapError(msg) from err
-
-    def minibatch(self, images, side, is_display, do_shuffle, batchsize):
-        """ A generator function that yields epoch, batchsize of warped_img
-            and batchsize of target_img from the load queue """
-        logger.debug("Loading minibatch generator: (image_count: %s, side: '%s', is_display: %s, "
-                     "do_shuffle: %s)", len(images), side, is_display, do_shuffle)
-        self.validate_samples(images)
-
-        def _img_iter(imgs):
-            while True:
-                if do_shuffle:
-                    shuffle(imgs)
-                for img in imgs:
-                    yield img
-
-        img_iter = _img_iter(images)
-        while True:
-            batch = list()
-            for _ in range(batchsize):
-                img_path = next(img_iter)
-                data = self.process_face(img_path, side, is_display)
-                batch.append(data)
-            batch = list(zip(*batch))
-            batch = [np.array(x, dtype="float32") for x in batch]
-            logger.trace("Yielding batch: (size: %s, item shapes: %s, side:  '%s', "
-                         "is_display: %s)",
-                         len(batch), [item.shape for item in batch], side, is_display)
-            yield batch
-
-        logger.debug("Finished minibatch generator: (side: '%s', is_display: %s)",
-                     side, is_display)
-
-    def process_face(self, filename, side, is_display):
-        """ Load an image and perform transformation and warping """
-        logger.trace("Process face: (filename: '%s', side: '%s', is_display: %s)",
-                     filename, side, is_display)
-        image = cv2_read_img(filename, raise_error=True)
-        if self.mask_class or self.training_opts["warp_to_landmarks"]:
-            src_pts = self.get_landmarks(filename, image, side)
-        if self.mask_class:
-            image = self.mask_class(src_pts, image, channels=4).mask
-
-        image = self.processing.color_adjust(image,
-                                             self.training_opts["augment_color"],
-                                             is_display)
-        if not is_display:
-            image = self.processing.random_transform(image)
-            if not self.training_opts["no_flip"]:
-                image = self.processing.do_random_flip(image)
-        sample = image.copy()[:, :, :3]
-
-        if self.training_opts["warp_to_landmarks"]:
-            dst_pts = self.get_closest_match(filename, side, src_pts)
-            processed = self.processing.random_warp_landmarks(image, src_pts, dst_pts)
-        else:
-            processed = self.processing.random_warp(image)
-
-        processed.insert(0, sample)
-        logger.trace("Processed face: (filename: '%s', side: '%s', shapes: %s)",
-                     filename, side, [img.shape for img in processed])
-        return processed
-
     def get_landmarks(self, filename, image, side):
         """ Return the landmarks for this face """
         logger.trace("Retrieving landmarks: (filename: '%s', side: '%s'", filename, side)
@@ -156,6 +70,125 @@ class TrainingDataGenerator():
             raise FaceswapError(msg) from err
         logger.trace("Returning: (src_points: %s)", src_points)
         return src_points
+
+    def image_loader(self, filename, side):
+        """ Load and resize images with opencv """
+        image = cv2_read_img(filename, raise_error=True)
+        landmarks = self.get_landmarks(filename, image, side) if self.landmarks else None
+        return image, landmarks
+
+    def dataset_setup(self, img_file_list, side):
+        """ Create a mem-mapped image and landmark array for training"""
+        height, width = cv2_read_img(img_file_list[0], raise_error=True).shape[:2]
+        image_file = str(Path(img_file_list[0]).parents[0].joinpath(('Images_'))) + side + '.npy'
+        channels = 4 if self.mask_class else 3
+        image_shape = (len(img_file_list), height, width, channels)
+        images = np.memmap(image_file, dtype='uint8', mode='w+', shape=image_shape)
+
+        mark_file = str(Path(img_file_list[0]).parents[0].joinpath(('Landmarks'))) + side + '.npy'
+        mark_shape = (len(img_file_list), 68, 2)
+        landmarks = np.memmap(mark_file, dtype='uint32', mode='w+', shape=mark_shape)
+
+        generator = (self.image_loader(filename, side) for filename in img_file_list)
+        for index, (image, landmark) in enumerate(generator):
+            images[index, :, :, :3] = image[:, :, :3]
+            if self.landmarks:
+                landmarks[index] = landmark
+
+        if self.mask_class:
+            for index, (image, landmark) in enumerate(zip(images, landmarks)):
+                images[index] = self.mask_class(landmark, image, channels=4).mask
+
+        del images  # flush memmap to disk and save changes
+        del landmarks  # flush memmap to disk and save changes
+
+        return image_file, mark_file, image_shape, mark_shape
+
+    def minibatch_ab(self, image_file, mark_file, image_shape, mark_shape, batchsize, side,
+                     do_shuffle=True, is_preview=False, is_timelapse=False):
+        """ Keep a queue filled to 8x Batch Size """
+        logger.debug("Queue batches: (image_count: %s, batchsize: %s, side: '%s', do_shuffle: %s, "
+                     "is_preview, %s, is_timelapse: %s)", 444, batchsize, side, do_shuffle,
+                     is_preview, is_timelapse)
+        self.batchsize = batchsize
+        is_display = is_preview or is_timelapse
+        images_npy = np.memmap(image_file, dtype='uint8', mode='c', shape=image_shape)
+        landmarks_npy = np.memmap(mark_file, dtype='uint32', mode='c', shape=mark_shape)
+        args = (images_npy, landmarks_npy, side, is_display, do_shuffle, batchsize)
+        batcher = BackgroundGenerator(self.minibatch, thread_count=2, args=args)
+        return batcher.iterator()
+
+    def validate_samples(self, data):
+        """ Check the total number of images against batchsize and return
+            the total number of images """
+        length = data.shape[0]
+        msg = ("Number of images is lower than batch-size (Note that too few "
+               "images may lead to bad training). # images: {}, "
+               "batch-size: {}".format(length, self.batchsize))
+        try:
+            assert length >= self.batchsize, msg
+        except AssertionError as err:
+            msg += ("\nYou should increase the number of images in your training set or lower "
+                    "your batch-size.")
+            raise FaceswapError(msg) from err
+
+    def minibatch(self, images_npy, landmarks_npy, side, is_display, do_shuffle, batchsize):
+        """ A generator function that yields epoch, batchsize of warped_img
+            and batchsize of target_img from the load queue """
+        logger.debug("Loading minibatch generator: (image_count: %s, side: '%s', is_display: %s, "
+                     "do_shuffle: %s)", images_npy.shape[0], side, is_display, do_shuffle)
+        self.validate_samples(images_npy)
+
+        def _image_iterator(images, landmarks):
+            """ Yield pairs of corresponding images and landmarks and shuffle as needed """
+            while True:
+                if do_shuffle:
+                    rng_state = np.random.get_state()
+                    np.random.set_state(rng_state)
+                    np.random.shuffle(images)
+                    np.random.set_state(rng_state)
+                    np.random.shuffle(landmarks)
+                for image, landmark in zip(images, landmarks):
+                    yield image, landmark
+
+        image_iterator = _image_iterator(images_npy, landmarks_npy)
+        while True:
+            batch = list()
+            for _ in range(batchsize):
+                image, landmark = next(image_iterator)
+                data = self.process_face(image, landmark, side, is_display)
+                batch.append(data)
+            batch = list(zip(*batch))
+            batch = [np.array(x, dtype="float32") for x in batch]
+            logger.trace("Yielding batch: (size: %s, item shapes: %s, side:  '%s', "
+                         "is_display: %s)",
+                         len(batch), [item.shape for item in batch], side, is_display)
+            yield batch
+
+        logger.debug("Finished minibatch generator: (side: '%s', is_display: %s)",
+                     side, is_display)
+
+    def process_face(self, image, landmarks, side, is_display):
+        """ Load an image and perform transformation and warping """
+        image = self.processing.color_adjust(image,
+                                             self.training_opts["augment_color"],
+                                             is_display)
+        if not is_display:
+            image = self.processing.random_transform(image)
+            if not self.training_opts["no_flip"]:
+                image = self.processing.do_random_flip(image)
+        sample = image.copy()[:, :, :3]
+
+        if self.training_opts["warp_to_landmarks"]:
+            warped_landmarks = self.get_closest_match(filename, side, landmarks)
+            processed = self.processing.random_warp_landmarks(image, landmarks, warped_landmarks)
+        else:
+            processed = self.processing.random_warp(image)
+
+        processed.insert(0, sample)
+        logger.trace("Processed face: (side: '%s', shapes: %s)",
+                     side, [img.shape for img in processed])
+        return processed
 
     def get_closest_match(self, filename, side, src_points):
         """ Return closest matched landmarks from opposite set """
