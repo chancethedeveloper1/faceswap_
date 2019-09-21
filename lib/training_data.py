@@ -85,7 +85,7 @@ class TrainingDataGenerator():
         image_shape = (len(img_file_list), height, width, channels)
         images = np.memmap(image_file, dtype='uint8', mode='w+', shape=image_shape)
 
-        mark_file = str(Path(img_file_list[0]).parents[0].joinpath(('Landmarks'))) + side + '.npy'
+        mark_file = str(Path(img_file_list[0]).parents[0].joinpath(('Landmarks_'))) + side + '.npy'
         mark_shape = (len(img_file_list), 68, 2)
         landmarks = np.memmap(mark_file, dtype='uint32', mode='w+', shape=mark_shape)
 
@@ -102,26 +102,23 @@ class TrainingDataGenerator():
         del images  # flush memmap to disk and save changes
         del landmarks  # flush memmap to disk and save changes
 
-        return image_file, mark_file, image_shape, mark_shape
+        return [image_file, mark_file, image_shape, mark_shape]
 
-    def minibatch_ab(self, image_file, mark_file, image_shape, mark_shape, batchsize, side,
-                     do_shuffle=True, is_preview=False, is_timelapse=False):
+    def minibatch_ab(self, image_dataset, batchsize, side, do_shuffle=True, is_preview=False,
+                     is_timelapse=False):
         """ Keep a queue filled to 8x Batch Size """
-        logger.debug("Queue batches: (image_count: %s, batchsize: %s, side: '%s', do_shuffle: %s, "
-                     "is_preview, %s, is_timelapse: %s)", 444, batchsize, side, do_shuffle,
-                     is_preview, is_timelapse)
+        logger.debug("Queue batches: (image_count: %s, batchsize: %s, side: '%s', "
+                     "do_shuffle: %s, is_preview, %s, is_timelapse: %s)", image_dataset[2][0],
+                     batchsize, side, do_shuffle, is_preview, is_timelapse)
         self.batchsize = batchsize
         is_display = is_preview or is_timelapse
-        images_npy = np.memmap(image_file, dtype='uint8', mode='c', shape=image_shape)
-        landmarks_npy = np.memmap(mark_file, dtype='uint32', mode='c', shape=mark_shape)
-        args = (images_npy, landmarks_npy, side, is_display, do_shuffle, batchsize)
+        args = (image_dataset, side, is_display, do_shuffle, batchsize)
         batcher = BackgroundGenerator(self.minibatch, thread_count=2, args=args)
         return batcher.iterator()
 
-    def validate_samples(self, data):
+    def validate_samples(self, length):
         """ Check the total number of images against batchsize and return
             the total number of images """
-        length = data.shape[0]
         msg = ("Number of images is lower than batch-size (Note that too few "
                "images may lead to bad training). # images: {}, "
                "batch-size: {}".format(length, self.batchsize))
@@ -132,16 +129,18 @@ class TrainingDataGenerator():
                     "your batch-size.")
             raise FaceswapError(msg) from err
 
-    def minibatch(self, images_npy, landmarks_npy, side, is_display, do_shuffle, batchsize):
+    def minibatch(self, image_dataset, side, is_display, do_shuffle, batchsize):
         """ A generator function that yields epoch, batchsize of warped_img
             and batchsize of target_img from the load queue """
-        logger.debug("Loading minibatch generator: (image_count: %s, side: '%s', is_display: %s, "
-                     "do_shuffle: %s)", images_npy.shape[0], side, is_display, do_shuffle)
-        self.validate_samples(images_npy)
+        logger.debug("Loading minibatch generator: (image_count: %s, side: '%s', is_display: %s)",
+                     image_dataset[2][0], side, is_display)
+        self.validate_samples(image_dataset[2][0])
 
-        def _image_iterator(images, landmarks):
+        def _image_iterator(do_shuffle, dataset):
             """ Yield pairs of corresponding images and landmarks and shuffle as needed """
             while True:
+                images = np.memmap(dataset[0], dtype='uint8', mode='c', shape=dataset[2])
+                landmarks = np.memmap(dataset[1], dtype='uint32', mode='c', shape=dataset[3])
                 if do_shuffle:
                     rng_state = np.random.get_state()
                     np.random.set_state(rng_state)
@@ -150,8 +149,10 @@ class TrainingDataGenerator():
                     np.random.shuffle(landmarks)
                 for image, landmark in zip(images, landmarks):
                     yield image, landmark
+                del images
+                del landmarks
 
-        image_iterator = _image_iterator(images_npy, landmarks_npy)
+        image_iterator = _image_iterator(do_shuffle, image_dataset)
         while True:
             batch = list()
             for _ in range(batchsize):
@@ -160,7 +161,7 @@ class TrainingDataGenerator():
                 batch.append(data)
             batch = list(zip(*batch))
             batch = [np.array(x, dtype="float32") for x in batch]
-            logger.trace("Yielding batch: (size: %s, item shapes: %s, side:  '%s', "
+            logger.trace("Yielding batch: (size: %s, item shapes: %s, side: '%s', "
                          "is_display: %s)",
                          len(batch), [item.shape for item in batch], side, is_display)
             yield batch
