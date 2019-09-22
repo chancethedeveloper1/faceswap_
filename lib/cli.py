@@ -1230,15 +1230,6 @@ class TrainArgs(FaceSwapArgs):
                                       "This is the 'dfaker' way of doing warping. Alignments "
                                       "files for both sets of faces must be provided if using "
                                       "this option."})
-        argument_list.append({"opts": ("-nf", "--no-flip"),
-                              "action": "store_true",
-                              "dest": "no_flip",
-                              "group": "training",
-                              "default": False,
-                              "help": "To effectively learn, a random set of images are flipped "
-                                      "horizontally. Sometimes it is desirable for this not to "
-                                      "occur. Generally this should be left off except for "
-                                      "during 'fit training'."})
         argument_list.append({"opts": ("-nac", "--no-augment-color"),
                               "action": "store_true",
                               "dest": "no_augment_color",

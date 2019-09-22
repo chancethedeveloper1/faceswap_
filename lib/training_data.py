@@ -39,6 +39,12 @@ class TrainingDataGenerator():
                                             model_output_shapes,
                                             training_opts.get("coverage_ratio", 0.625),
                                             config)
+        self.transforms = np.array([config.get("rotation_range", 10),
+                                    config.get("zoom_range", 5) / 100.,
+                                    config.get("shift_range", 5) / 100.,
+                                    config.get("shift_range", 5) / 100.,
+                                    100.])
+        self.flip_chance = config.get("random_flip", 50) * 2. - 100.
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def set_mask_class(self):
@@ -129,6 +135,27 @@ class TrainingDataGenerator():
                     "your batch-size.")
             raise FaceswapError(msg) from err
 
+    def cache_matrices(self, images, image_shape):
+        """ Pre-compute affine transformation matrices for an entire epoch """
+        logger.trace("Cache an epoch of transform matrices")
+
+        affine = np.random.uniform(-1. ,1. ,(image_shape[0], 5)) * self.transforms[None, :]
+        matrices = np.ones((image_shape[0], 2, 3), dtype='float32')
+        flip = np.ones(image_shape[0], dtype='float32')
+        alpha = (affine[:, 1] + 1.) * np.cos(np.radians(affine[:, 0]))
+        beta = (affine[:, 1] + 1.) * np.sin(np.radians(affine[:, 0]))
+        matrices[:, 0, 0] = alpha
+        matrices[:, 1, 0] = -beta
+        matrices[:, 0, 1] = beta
+        matrices[:, 1, 1] = alpha
+        matrices[:, 0, 2] = image_shape[1] * (0.5 * (-beta + (1 - alpha)) + affine[:, 2])
+        matrices[:, 1, 2] = image_shape[1] * (0.5 * (beta + (1 - alpha)) + affine[:, 3])
+
+        flips = affine[:, 4] >= self.flip_chance
+        images[flips] = images[flips, : ,::-1]
+        logger.debug("Finished caching an epoch of transform matrices")
+        return images, matrices
+
     def minibatch(self, image_dataset, side, is_display, do_shuffle, batchsize):
         """ A generator function that yields epoch, batchsize of warped_img
             and batchsize of target_img from the load queue """
@@ -141,14 +168,15 @@ class TrainingDataGenerator():
             while True:
                 images = np.memmap(dataset[0], dtype='uint8', mode='c', shape=dataset[2])
                 landmarks = np.memmap(dataset[1], dtype='uint32', mode='c', shape=dataset[3])
+                images, matrices = self.cache_matrices(images, dataset[2])
                 if do_shuffle:
                     rng_state = np.random.get_state()
                     np.random.set_state(rng_state)
                     np.random.shuffle(images)
                     np.random.set_state(rng_state)
                     np.random.shuffle(landmarks)
-                for image, landmark in zip(images, landmarks):
-                    yield image, landmark
+                for image, landmark, matrix in zip(images, landmarks, matrices):
+                    yield image, landmark, matrix
                 del images
                 del landmarks
 
@@ -156,8 +184,8 @@ class TrainingDataGenerator():
         while True:
             batch = list()
             for _ in range(batchsize):
-                image, landmark = next(image_iterator)
-                data = self.process_face(image, landmark, side, is_display)
+                image, landmark, matrix = next(image_iterator)
+                data = self.process_face(image, landmark, matrix, side, is_display)
                 batch.append(data)
             batch = list(zip(*batch))
             batch = [np.array(x, dtype="float32") for x in batch]
@@ -169,15 +197,13 @@ class TrainingDataGenerator():
         logger.debug("Finished minibatch generator: (side: '%s', is_display: %s)",
                      side, is_display)
 
-    def process_face(self, image, landmarks, side, is_display):
+    def process_face(self, image, landmarks, matrix, side, is_display):
         """ Load an image and perform transformation and warping """
         image = self.processing.color_adjust(image,
                                              self.training_opts["augment_color"],
                                              is_display)
         if not is_display:
-            image = self.processing.random_transform(image)
-            if not self.training_opts["no_flip"]:
-                image = self.processing.do_random_flip(image)
+            image = self.processing.random_transform(image, matrix)
         sample = image.copy()[:, :, :3]
 
         if self.training_opts["warp_to_landmarks"]:
@@ -298,43 +324,13 @@ class ImageManipulation():
         logger.trace("Coverage: %s", coverage)
         return coverage
 
-    def random_transform(self, image):
+    def random_transform(self, image, matrix):
         """ Randomly transform an image """
         logger.trace("Randomly transforming image")
         height, width = image.shape[0:2]
-
-        rotation_range = self.config.get("rotation_range", 10)
-        rotation = np.random.uniform(-rotation_range, rotation_range)
-
-        zoom_range = self.config.get("zoom_range", 5) / 100
-        scale = np.random.uniform(1 - zoom_range, 1 + zoom_range)
-
-        shift_range = self.config.get("shift_range", 5) / 100
-        tnx = np.random.uniform(-shift_range, shift_range) * width
-        tny = np.random.uniform(-shift_range, shift_range) * height
-
-        mat = cv2.getRotationMatrix2D(  # pylint:disable=no-member
-            (width // 2, height // 2), rotation, scale)
-        mat[:, 2] += (tnx, tny)
-        result = cv2.warpAffine(  # pylint:disable=no-member
-            image, mat, (width, height),
-            borderMode=cv2.BORDER_REPLICATE)  # pylint:disable=no-member
-
+        result = cv2.warpAffine(image, matrix, (width, height), borderMode=cv2.BORDER_REPLICATE)
         logger.trace("Randomly transformed image")
         return result
-
-    def do_random_flip(self, image):
-        """ Perform flip on image if random number is within threshold """
-        logger.trace("Randomly flipping image")
-        random_flip = self.config.get("random_flip", 50) / 100
-        if np.random.random() < random_flip:
-            logger.trace("Flip within threshold. Flipping")
-            retval = image[:, ::-1]
-        else:
-            logger.trace("Flip outside threshold. Not Flipping")
-            retval = image
-        logger.trace("Randomly flipped image")
-        return retval
 
     def random_warp(self, image):
         """ get pair of random warped images from aligned face image """
