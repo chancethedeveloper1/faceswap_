@@ -209,20 +209,20 @@ class Train():
         """ Perform the training cycle """
         logger.debug("Running Training Cycle")
         if self.args.write_image or self.args.redirect_gui or self.args.preview:
-            display_func = self.show
+            preview_viewer = self.show
         else:
-            display_func = None
+            preview_viewer = None
 
         for iteration in range(0, self.args.iterations):
             logger.trace("Training iteration: %s", iteration)
             save_iteration = iteration % self.args.save_interval == 0
-            viewer = display_func if save_iteration or self.save_now else None
             timelapse = self.timelapse if save_iteration else None
-            trainer.train_one_step(viewer, timelapse)
+            trainer.train_one_step(timelapse)
             if self.stop:
                 logger.debug("Stop received. Terminating")
                 break
             if save_iteration:
+                trainer.generate_preview(preview_viewer)
                 logger.trace("Save Iteration: (iteration: %s", iteration)
                 if self.args.pingpong:
                     model.save_models()
@@ -230,6 +230,7 @@ class Train():
                 else:
                     model.save_models()
             elif self.save_now:
+                trainer.generate_preview(preview_viewer)
                 logger.trace("Save Requested: (iteration: %s", iteration)
                 model.save_models()
                 self.save_now = False

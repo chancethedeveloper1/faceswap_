@@ -97,57 +97,37 @@ class TrainingDataGenerator():
         self._processing = None
         logger.debug("Initialized %s", self.__class__.__name__)
 
-    def get_landmarks(self, filename, image, side):
-        """ Return the landmarks for this face """
-        logger.trace("Retrieving landmarks: (filename: '%s', side: '%s'", filename, side)
-        lm_key = sha1(image).hexdigest()
-        try:
-            src_points = self.landmarks[side][lm_key]
-        except KeyError as err:
-            msg = ("At least one of your images does not have a matching entry in your alignments "
-                   "file."
-                   "\nIf you are training with a mask or using 'warp to landmarks' then every "
-                   "face you intend to train on must exist within the alignments file."
-                   "\nThe specific file that caused the failure was '{}' which has a hash of {}."
-                   "\nMost likely there will be more than just this file missing from the "
-                   "alignments file. You can use the Alignments Tool to help identify missing "
-                   "alignments".format(lm_key, filename))
-            raise FaceswapError(msg) from err
-        logger.trace("Returning: (src_points: %s)", src_points)
-        return src_points
-
-    def image_loader(self, filename, side):
-        """ Load and resize images with opencv """
-        image = cv2_read_img(filename, raise_error=True)
-        landmarks = self.get_landmarks(filename, image, side) if self.landmarks else None
-        return image, landmarks
-
-    def dataset_setup(self, img_file_list, side):
+    def dataset_setup(self, img_file_lists, sides):
         """ Create a mem-mapped image and landmark array for training"""
-        height, width = cv2_read_img(img_file_list[0], raise_error=True).shape[:2]
-        image_file = str(Path(img_file_list[0]).parents[0].joinpath(('Images_'))) + side + '.npy'
-        channels = 4 if self.mask_class else 3
-        image_shape = (len(img_file_list), height, width, channels)
-        images = np.memmap(image_file, dtype='uint8', mode='w+', shape=image_shape)
+        files = dict()
+        for side in sides:
+            img_file_list = img_file_lists[side]
+            height, width = cv2_read_img(img_file_list[0], raise_error=True).shape[:2]
+            image_file = str(Path(img_file_list[0]).parents[0]) + 'Images_' + side + '.npy'
+            channels = 4 if self.mask_class else 3
+            image_shape = (len(img_file_list), height, width, channels)
+            images = np.memmap(image_file, dtype='uint8', mode='w+', shape=image_shape)
 
-        mark_file = str(Path(img_file_list[0]).parents[0].joinpath(('Landmarks_'))) + side + '.npy'
-        mark_shape = (len(img_file_list), 68, 2)
-        landmarks = np.memmap(mark_file, dtype='uint32', mode='w+', shape=mark_shape)
-
-        generator = (self.image_loader(filename, side) for filename in img_file_list)
-        for index, (image, landmark) in enumerate(generator):
-            images[index, :, :, :3] = image[:, :, :3]
             if self.landmarks:
-                landmarks[index] = landmark
+                mark_file = str(Path(img_file_list[0]).parents[0]) + 'Landmarks_' + side + '.npy'
+                mark_shape = (len(img_file_list), 68, 2)
+                landmarks = np.memmap(mark_file, dtype='uint32', mode='w+', shape=mark_shape)
 
-        if self.mask_class:
-            for index, (image, landmark) in enumerate(zip(images, landmarks)):
-                images[index] = self.mask_class(landmark, image, channels=4).mask
+            generator = (self.image_loader(filename, side) for filename in img_file_list)
+            for index, (image, landmark) in enumerate(generator):
+                images[index, :, :, :3] = image[:, :, :3]
+                    landmarks[index] = landmark
 
-        del images  # flush memmap to disk and save changes
-        del landmarks  # flush memmap to disk and save changes
+            if self.mask_class:
+                for index, (image, landmark) in enumerate(zip(images, landmarks)):
+                    images[index] = self.mask_class(landmark, image, channels=4).mask
 
-        return [image_file, mark_file, image_shape, mark_shape]
+            del images  # flush memmap to disk and save changes
+            del landmarks  # flush memmap to disk and save changes
+
+            files[side] = [image_file, mark_file, image_shape, mark_shape]
+
+        return files
 
     def minibatch_ab(self, image_dataset, batchsize, side, do_shuffle=True, is_preview=False,
                      is_timelapse=False):
@@ -219,7 +199,69 @@ class TrainingDataGenerator():
         batcher = BackgroundGenerator(self._minibatch, thread_count=2, args=args)
         return batcher.iterator()
 
-    def validate_samples(self, length):
+    def _image_loader(self, filename, side):
+        """ Load and resize images with opencv """
+        image = cv2_read_img(filename, raise_error=True)
+        landmarks = self.get_landmarks(filename, image, side) if self.landmarks else None
+        return image, landmarks
+
+    def _get_landmarks(self, filenames, batch, side):
+        """ Obtains the 68 Point Landmarks for the images in this batch. This is only called if
+        config item ``warp_to_landmarks`` is ``True`` or if :attr:`mask_type` is not ``None``. If
+        the landmarks for an image cannot be found, then an error is raised. """
+        logger.trace("Retrieving landmarks: (filenames: '%s', side: '%s'", filenames, side)
+        landmark_gen = (self._landmarks[side].get(sha1(face).hexdigest(), None) for face in batch)
+        src_points = np.array(tuple(landmark_gen))
+
+        # Raise error on missing alignments
+        if not all(isinstance(pts, np.ndarray) for pts in src_points):
+            missing = [filenames[idx]
+                       for idx, hsh in enumerate(src_points)
+                       if hsh is None]
+            msg = ("Files missing alignments for this batch: {}"
+                   "\nAt least one of your images does not have a matching entry in your "
+                   "alignments file."
+                   "\nIf you are training with a mask or using 'warp to landmarks' then every "
+                   "face you intend to train on must exist within the alignments file."
+                   "\nThe specific files that caused this failure are listed above."
+                   "\nMost likely there will be more than just these files missing from the "
+                   "alignments file. You can use the Alignments Tool to help identify missing "
+                   "alignments".format(missing))
+            raise FaceswapError(msg)
+
+        logger.trace("Returning: (src_points: %s)", src_points)
+        return src_points
+
+    def _get_closest_match(self, filenames, side, batch_src_points):
+        """ Only called if the config item ``warp_to_landmarks`` is ``True``. Gets the closest \
+        matched 68 point landmarks from the opposite training set. """
+        logger.trace("Retrieving closest matched landmarks: (filenames: '%s', src_points: '%s'",
+                     filenames, batch_src_points)
+        landmarks = self._landmarks["a"] if side == "b" else self._landmarks["b"]
+        closest_hashes = [self._nearest_landmarks.get(filename) for filename in filenames]
+        if None in closest_hashes:
+            closest_hashes = self._cache_closest_hashes(filenames, batch_src_points, landmarks)
+
+        batch_dst_points = np.array([landmarks[choice(hsh)] for hsh in closest_hashes])
+        logger.trace("Returning: (batch_dst_points: %s)", batch_dst_points.shape)
+        return batch_dst_points
+
+    def _cache_closest_hashes(self, filenames, batch_src_points, landmarks):
+        """ Cache the nearest landmarks for this batch """
+        logger.trace("Caching closest hashes")
+        dst_landmarks = list(landmarks.items())
+        dst_points = np.array([lm[1] for lm in dst_landmarks])
+        batch_closest_hashes = list()
+
+        for filename, src_points in zip(filenames, batch_src_points):
+            closest = (np.mean(np.square(src_points - dst_points), axis=(1, 2))).argsort()[:10]
+            closest_hashes = tuple(dst_landmarks[i][0] for i in closest)
+            self._nearest_landmarks[filename] = closest_hashes
+            batch_closest_hashes.append(closest_hashes)
+        logger.trace("Cached closest hashes")
+        return batch_closest_hashes
+
+    def _validate_samples(self, length):
         """ Check the total number of images against batchsize and return
             the total number of images """
         msg = ("Number of images is lower than batch-size (Note that too few "
@@ -232,7 +274,7 @@ class TrainingDataGenerator():
                     "your batch-size.")
             raise FaceswapError(msg) from err
 
-    def cache_matrices(self, images, image_shape):
+    def _cache_matrices(self, images, image_shape):
         """ Pre-compute affine transformation matrices for an entire epoch """
         logger.trace("Cache an epoch of transform matrices")
 
@@ -279,24 +321,10 @@ class TrainingDataGenerator():
 
         image_iterator = _image_iterator(do_shuffle, image_dataset)
         while True:
-            img_paths = [next(img_iter) for _ in range(batchsize)]
-            yield self._process_batch(img_paths, side)
+            list_of_img_landmark_matrix = [next(image_iterator) for _ in range(batchsize)]
+            yield self._process_batch(list_of_img_landmark_matrix, side)
 
         logger.debug("Finished minibatch generator: (side: '%s')", side)
-            batch = list()
-            for _ in range(batchsize):
-                image, landmark, matrix = next(image_iterator)
-                data = self.process_face(image, landmark, matrix, side, is_display)
-                batch.append(data)
-            batch = list(zip(*batch))
-            batch = [np.array(x, dtype="float32") for x in batch]
-            logger.trace("Yielding batch: (size: %s, item shapes: %s, side: '%s', "
-                         "is_display: %s)",
-                         len(batch), [item.shape for item in batch], side, is_display)
-            yield batch
-
-        logger.debug("Finished minibatch generator: (side: '%s', is_display: %s)",
-                     side, is_display)
 
     def _process_batch(self, filenames, side):
         """ Performs the augmentation and compiles target images and samples. See
@@ -353,59 +381,7 @@ class TrainingDataGenerator():
 
         return processed
 
-    def _get_landmarks(self, filenames, batch, side):
-        """ Obtains the 68 Point Landmarks for the images in this batch. This is only called if
-        config item ``warp_to_landmarks`` is ``True`` or if :attr:`mask_type` is not ``None``. If
-        the landmarks for an image cannot be found, then an error is raised. """
-        logger.trace("Retrieving landmarks: (filenames: '%s', side: '%s'", filenames, side)
-        src_points = [self._landmarks[side].get(sha1(face).hexdigest(), None) for face in batch]
 
-        # Raise error on missing alignments
-        if not all(isinstance(pts, np.ndarray) for pts in src_points):
-            indices = [idx for idx, hsh in enumerate(src_points) if hsh is None]
-            missing = [filenames[idx] for idx in indices]
-            msg = ("Files missing alignments for this batch: {}"
-                   "\nAt least one of your images does not have a matching entry in your "
-                   "alignments file."
-                   "\nIf you are training with a mask or using 'warp to landmarks' then every "
-                   "face you intend to train on must exist within the alignments file."
-                   "\nThe specific files that caused this failure are listed above."
-                   "\nMost likely there will be more than just these files missing from the "
-                   "alignments file. You can use the Alignments Tool to help identify missing "
-                   "alignments".format(missing))
-            raise FaceswapError(msg)
-
-        logger.trace("Returning: (src_points: %s)", src_points)
-        return np.array(src_points)
-
-    def _get_closest_match(self, filenames, side, batch_src_points):
-        """ Only called if the config item ``warp_to_landmarks`` is ``True``. Gets the closest \
-        matched 68 point landmarks from the opposite training set. """
-        logger.trace("Retrieving closest matched landmarks: (filenames: '%s', src_points: '%s'",
-                     filenames, batch_src_points)
-        landmarks = self._landmarks["a"] if side == "b" else self._landmarks["b"]
-        closest_hashes = [self._nearest_landmarks.get(filename) for filename in filenames]
-        if None in closest_hashes:
-            closest_hashes = self._cache_closest_hashes(filenames, batch_src_points, landmarks)
-
-        batch_dst_points = np.array([landmarks[choice(hsh)] for hsh in closest_hashes])
-        logger.trace("Returning: (batch_dst_points: %s)", batch_dst_points.shape)
-        return batch_dst_points
-
-    def _cache_closest_hashes(self, filenames, batch_src_points, landmarks):
-        """ Cache the nearest landmarks for this batch """
-        logger.trace("Caching closest hashes")
-        dst_landmarks = list(landmarks.items())
-        dst_points = np.array([lm[1] for lm in dst_landmarks])
-        batch_closest_hashes = list()
-
-        for filename, src_points in zip(filenames, batch_src_points):
-            closest = (np.mean(np.square(src_points - dst_points), axis=(1, 2))).argsort()[:10]
-            closest_hashes = tuple(dst_landmarks[i][0] for i in closest)
-            self._nearest_landmarks[filename] = closest_hashes
-            batch_closest_hashes.append(closest_hashes)
-        logger.trace("Cached closest hashes")
-        return batch_closest_hashes
 
 
 class ImageAugmentation():
