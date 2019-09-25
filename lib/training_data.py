@@ -5,7 +5,7 @@ import logging
 
 from hashlib import sha1
 from pathlib import Path
-from random import random, shuffle, choice
+from random import choice
 
 import numpy as np
 import cv2
@@ -382,8 +382,6 @@ class TrainingDataGenerator():
         return processed
 
 
-
-
 class ImageAugmentation():
     """ Performs augmentation on batches of training images.
 
@@ -496,7 +494,8 @@ class ImageAugmentation():
                                warp_lm_edge_anchors=edge_anchors,
                                warp_lm_grids=grids)
         self.initialized = True
-        logger.debug("Initialized constants: %s", self._constants)
+        logger.debug("Initialized constants: %s", {k: str(v) if isinstance(v, np.ndarray) else v
+                                                   for k, v in self._constants.items()})
 
     # <<< TARGET IMAGES >>> #
     def get_targets(self, batch):
@@ -719,8 +718,12 @@ class ImageAugmentation():
         kwargs: dict
             If :attr:`to_landmarks` is ``True`` the following additional kwargs must be passed in:
 
-            * **src_points** (`numpy.ndarray`) -
-            * **dst_points** (`numpy.ndarray`) -
+            * **batch_src_points** (`numpy.ndarray`) - A batch of 68 point landmarks for the \
+            source faces. This is a 3-dimensional array in the shape (`batchsize`, `68`, `2`).
+
+            * **batch_dst_points** (`numpy.ndarray`) - A batch of randomly chosen closest match \
+            destination faces landmarks. This is a 3-dimensional array in the shape (`batchsize`, \
+             `68`, `2`).
         Returns
         ----------
         numpy.ndarray
