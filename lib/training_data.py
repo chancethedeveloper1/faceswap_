@@ -11,7 +11,7 @@ import numpy as np
 import cv2
 from scipy.interpolate import griddata
 
-from lib.image import batch_convert_color, read_image_batch
+from lib.image import batch_convert_color, read_image, read_image_batch
 from lib.model import masks
 from lib.multithreading import BackgroundGenerator
 from lib.utils import FaceswapError
@@ -102,25 +102,26 @@ class TrainingDataGenerator():
         files = dict()
         for side in sides:
             img_file_list = img_file_lists[side]
-            height, width = cv2_read_img(img_file_list[0], raise_error=True).shape[:2]
+            height, width = read_image(img_file_list[0], raise_error=True).shape[:2]
             image_file = str(Path(img_file_list[0]).parents[0]) + 'Images_' + side + '.npy'
-            channels = 4 if self.mask_class else 3
+            channels = 4 if self._mask_class else 3
             image_shape = (len(img_file_list), height, width, channels)
             images = np.memmap(image_file, dtype='uint8', mode='w+', shape=image_shape)
 
-            if self.landmarks:
+            if self._landmarks:
                 mark_file = str(Path(img_file_list[0]).parents[0]) + 'Landmarks_' + side + '.npy'
                 mark_shape = (len(img_file_list), 68, 2)
                 landmarks = np.memmap(mark_file, dtype='uint32', mode='w+', shape=mark_shape)
 
-            generator = (self.image_loader(filename, side) for filename in img_file_list)
+            generator = (self._image_loader(filename, side) for filename in img_file_list)
             for index, (image, landmark) in enumerate(generator):
                 images[index, :, :, :3] = image[:, :, :3]
+                if self._landmarks:  # TODO move IF outside loop if possible
                     landmarks[index] = landmark
 
-            if self.mask_class:
+            if self._mask_class:
                 for index, (image, landmark) in enumerate(zip(images, landmarks)):
-                    images[index] = self.mask_class(landmark, image, channels=4).mask
+                    images[index] = self._mask_class(landmark, image, channels=4).mask
 
             del images  # flush memmap to disk and save changes
             del landmarks  # flush memmap to disk and save changes
@@ -185,8 +186,8 @@ class TrainingDataGenerator():
             :attr:`is_timelapse` is ``True``
         """
         logger.debug("Queue batches: (image_count: %s, batchsize: %s, side: '%s', do_shuffle: %s, "
-                     "is_preview, %s, is_timelapse: %s)", len(images), batchsize, side, do_shuffle,
-                     is_preview, is_timelapse)
+                     "is_preview, %s, is_timelapse: %s)", image_dataset[2][0], batchsize, side,
+                     do_shuffle, is_preview, is_timelapse)
         self._batchsize = batchsize
         self._processing = ImageAugmentation(batchsize,
                                              is_preview or is_timelapse,
@@ -194,15 +195,27 @@ class TrainingDataGenerator():
                                              self._model_output_shapes,
                                              self._training_opts.get("coverage_ratio", 0.625),
                                              self._config)
-        is_display = is_preview or is_timelapse
         args = (image_dataset, side, do_shuffle, batchsize)
         batcher = BackgroundGenerator(self._minibatch, thread_count=2, args=args)
         return batcher.iterator()
 
+    # << INTERNAL METHODS >> #
+    def _set__mask_class(self):
+        """ Returns the correct mask class from :mod:`lib`.model.masks` as defined in the
+        :attr:`mask_type` parameter. """
+        mask_type = self._training_opts.get("mask_type", None)
+        if mask_type:
+            logger.debug("Mask type: '%s'", mask_type)
+            _mask_class = getattr(masks, mask_type)
+        else:
+            _mask_class = None
+        logger.debug("Mask class: %s", _mask_class)
+        return _mask_class
+
     def _image_loader(self, filename, side):
         """ Load and resize images with opencv """
-        image = cv2_read_img(filename, raise_error=True)
-        landmarks = self.get_landmarks(filename, image, side) if self.landmarks else None
+        image = read_image(filename, raise_error=True)
+        landmarks = self._get_landmarks(filename, image, side) if self._landmarks else None
         return image, landmarks
 
     def _get_landmarks(self, filenames, batch, side):
@@ -278,9 +291,8 @@ class TrainingDataGenerator():
         """ Pre-compute affine transformation matrices for an entire epoch """
         logger.trace("Cache an epoch of transform matrices")
 
-        affine = np.random.uniform(-1. ,1. ,(image_shape[0], 5)) * self.transforms[None, :]
+        affine = np.random.uniform(-1., 1., (image_shape[0], 5)) * self.transforms[None, :]
         matrices = np.ones((image_shape[0], 2, 3), dtype='float32')
-        flip = np.ones(image_shape[0], dtype='float32')
         alpha = (affine[:, 1] + 1.) * np.cos(np.radians(affine[:, 0]))
         beta = (affine[:, 1] + 1.) * np.sin(np.radians(affine[:, 0]))
         matrices[:, 0, 0] = alpha
@@ -291,23 +303,23 @@ class TrainingDataGenerator():
         matrices[:, 1, 2] = image_shape[1] * (0.5 * (beta + (1 - alpha)) + affine[:, 3])
 
         flips = affine[:, 4] >= self.flip_chance
-        images[flips] = images[flips, : ,::-1]
+        images[flips] = images[flips, :, ::-1]
         logger.debug("Finished caching an epoch of transform matrices")
         return images, matrices
 
-    def _minibatch(self, image_dataset, side, is_display, do_shuffle, batchsize):
+    def _minibatch(self, image_dataset, side, do_shuffle, batchsize):
         """ A generator function that yields the augmented, target and sample images.
         see :func:`minibatch_ab` for more details on the output. """
         logger.debug("Loading minibatch generator: (image_count: %s, side: '%s', do shuffle: %s)",
                      image_dataset[2][0], side, do_shuffle)
-        self.validate_samples(image_dataset[2][0])
+        self._validate_samples(image_dataset[2][0])
 
         def _image_iterator(do_shuffle, dataset):
             """ Yield pairs of corresponding images and landmarks and shuffle as needed """
             while True:
                 images = np.memmap(dataset[0], dtype='uint8', mode='c', shape=dataset[2])
                 landmarks = np.memmap(dataset[1], dtype='uint32', mode='c', shape=dataset[3])
-                images, matrices = self.cache_matrices(images, dataset[2])
+                images, matrices = self._cache_matrices(images, dataset[2])
                 if do_shuffle:
                     rng_state = np.random.get_state()
                     np.random.set_state(rng_state)
@@ -322,25 +334,19 @@ class TrainingDataGenerator():
         image_iterator = _image_iterator(do_shuffle, image_dataset)
         while True:
             list_of_img_landmark_matrix = [next(image_iterator) for _ in range(batchsize)]
-            yield self._process_batch(list_of_img_landmark_matrix, side)
+            yield self._process_batch(*list_of_img_landmark_matrix, side)
 
         logger.debug("Finished minibatch generator: (side: '%s')", side)
 
-    def _process_batch(self, filenames, side):
+    def _process_batch(self, batch, landmarks, matrices, side):
         """ Performs the augmentation and compiles target images and samples. See
         :func:`minibatch_ab` for more details on the output. """
-        logger.trace("Process batch: (filenames: '%s', side: '%s')", filenames, side)
-        batch = read_image_batch(filenames)
+        # logger.trace("Process batch: (filenames: '%s', side: '%s')", filenames, side)
         processed = dict()
-        to_landmarks = self._training_opts["warp_to_landmarks"]
 
         # Initialize processing training size on first image
         if not self._processing.initialized:
             self._processing.initialize(batch.shape[1])
-
-        # Get Landmarks prior to manipulating the image
-        if self._mask_class or to_landmarks:
-            batch_src_pts = self._get_landmarks(filenames, batch, side)
 
         # Color augmentation before mask is added
         if self._training_opts["augment_color"]:
@@ -349,32 +355,29 @@ class TrainingDataGenerator():
         # Add mask to batch prior to transforms and warps
         if self._mask_class:
             batch = np.array([self._mask_class(src_pts, image, channels=4).mask
-                              for src_pts, image in zip(batch_src_pts, batch)])
-
-        # Random Transform and flip
-        batch = self._processing.transform(batch)
-        if not self._training_opts["no_flip"]:
-            batch = self._processing.random_flip(batch)
+                              for src_pts, image in zip(landmarks[0], batch)])
 
         # Add samples to output if this is for display
         if self._processing.is_display:
             processed["samples"] = batch[..., :3].astype("float32") / 255.0
+        # Random Transform and flip
+        else:
+            batch = self._processing.transform(batch, matrices)
 
         # Get Targets
         processed.update(self._processing.get_targets(batch))
 
         # Random Warp
-        if to_landmarks:
-            warp_kwargs = dict(batch_src_points=batch_src_pts,
-                               batch_dst_points=self._get_closest_match(filenames,
-                                                                        side,
-                                                                        batch_src_pts))
+        if self._training_opts["warp_to_landmarks"]:
+            warp_kwargs = dict(batch_src_points=landmarks[0],
+                               batch_dst_points=landmarks[1])
         else:
             warp_kwargs = dict()
-        processed["feed"] = self._processing.warp(batch[..., :3], to_landmarks, **warp_kwargs)
+        processed["feed"] = self._processing.warp(batch[..., :3],
+                                                  self._training_opts["warp_to_landmarks"],
+                                                  **warp_kwargs)
 
-        logger.trace("Processed batch: (filenames: %s, side: '%s', processed: %s)",
-                     filenames,
+        logger.trace("Processed batch: (side: '%s', processed: %s)",
                      side,
                      {k: v.shape if isinstance(v, np.ndarray) else[i.shape for i in v]
                       for k, v in processed.items()})
@@ -629,7 +632,7 @@ class ImageAugmentation():
         return batch
 
     # <<< IMAGE AUGMENTATION >>> #
-    def transform(self, batch):
+    def transform(self, batch, matrices):
         """ Perform random transformation on the passed in batch.
 
         The transformation parameters are set in :file:`config.train.ini`
@@ -645,62 +648,13 @@ class ImageAugmentation():
         numpy.ndarray
             A 4-dimensional array of the same shape as :attr:`batch` with transformation applied.
         """
-        if self.is_display:
-            return batch
         logger.trace("Randomly transforming image")
-        rotation_range = self._config.get("rotation_range", 10)
-        zoom_range = self._config.get("zoom_range", 5) / 100
-        shift_range = self._config.get("shift_range", 5) / 100
-
-        rotation = np.random.uniform(-rotation_range,
-                                     rotation_range,
-                                     size=self._batchsize).astype("float32")
-        scale = np.random.uniform(1 - zoom_range,
-                                  1 + zoom_range,
-                                  size=self._batchsize).astype("float32")
-        tform = np.random.uniform(
-            -shift_range,
-            shift_range,
-            size=(self._batchsize, 2)).astype("float32") * self._training_size
-
-        mats = np.array(
-            [cv2.getRotationMatrix2D((self._training_size // 2, self._training_size // 2),
-                                     rot,
-                                     scl)
-             for rot, scl in zip(rotation, scale)]).astype("float32")
-        mats[..., 2] += tform
-
         batch = np.array([cv2.warpAffine(image,
                                          mat,
                                          (self._training_size, self._training_size),
                                          borderMode=cv2.BORDER_REPLICATE)
-                          for image, mat in zip(batch, mats)])
-
+                          for image, mat in zip(batch, matrices)])
         logger.trace("Randomly transformed image")
-        return batch
-
-    def random_flip(self, batch):
-        """ Perform random horizontal flipping on the passed in batch.
-
-        The probability of flipping an image is set in :file:`config.train.ini`
-
-        Parameters
-        ----------
-        batch: numpy.ndarray
-            The batch should be a 4-dimensional array of shape (`batchsize`, `height`, `width`,
-            `channels`) and in `BGR` format.
-
-        Returns
-        ----------
-        numpy.ndarray
-            A 4-dimensional array of the same shape as :attr:`batch` with transformation applied.
-        """
-        if not self.is_display:
-            logger.trace("Randomly flipping image")
-            randoms = np.random.rand(self._batchsize)
-            indices = np.where(randoms > self._config.get("random_flip", 50) / 100)[0]
-            batch[indices] = batch[indices, :, ::-1]
-            logger.trace("Randomly flipped %s images of %s", len(indices), self._batchsize)
         return batch
 
     def warp(self, batch, to_landmarks=False, **kwargs):

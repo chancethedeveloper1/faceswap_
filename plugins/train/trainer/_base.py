@@ -48,7 +48,7 @@ def get_config(plugin_name, configfile=None):
 class TrainerBase():
     """ Base Trainer """
 
-    def __init__(self, model, images, batch_size configfile):
+    def __init__(self, model, images, batch_size, configfile):
         logger.debug("Initializing %s: (model: '%s', batch_size: %s)",
                      self.__class__.__name__, model, batch_size)
         self.config = get_config(".".join(self.__module__.split(".")[-2:]), configfile=configfile)
@@ -219,7 +219,7 @@ class Batcher():
     """ Batch images from a single side """
     def __init__(self, sides, images, model, use_mask, batch_size, config):
         logger.debug("Initializing %s: side: '%s', num_images: %s, batch_size: %s, config: %s)",
-                     self.__class__.__name__, side, len(images), batch_size, config)
+                     self.__class__.__name__, sides, len(images), batch_size, config)
         self.model = model
         self.use_mask = use_mask
         self.sides = sides
@@ -280,7 +280,7 @@ class Batcher():
         inputs, targets = self.get_next()
         try:
             if self.pingpong.active:
-                active_sides = {side: self.pingpong.side
+                active_sides = {side: self.pingpong.side}
             else:
                 active_sides = self.sides
             losses = {side: self.model.predictors[side].train_on_batch(x=input, y=target)
@@ -307,7 +307,7 @@ class Batcher():
             inputs = [batch["feed"], batch["masks"]]
             targets = [batch["targets"], batch["masks"]]
         else:
-            inputs = [batch["feed"]
+            inputs = [batch["feed"]]
             targets = [batch["targets"]]
         return inputs, targets
 
@@ -569,7 +569,7 @@ class Timelapse():
     def __init__(self, model, use_mask, coverage_ratio, batchers):
         logger.debug("Initializing %s: model: %s, use_mask: %s, coverage_ratio: %s, "
                      "batchers: '%s')", self.__class__.__name__, model,
-                     use_mask, coverage_ratio,, batchers)
+                     use_mask, coverage_ratio, batchers)
         self.samples = Samples(model, use_mask, coverage_ratio)
         self.model = model
         self.batchers = batchers

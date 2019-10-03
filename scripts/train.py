@@ -96,7 +96,7 @@ class Train():
             deprecation_warning("`-wl`, ``--warp-to-landmarks``",
                                 additional_info="This option will be available within training "
                                                 "config settings (/config/train.ini).")
-        if hasattr(self.args, "no_augment_color") and self.args.no_flip:
+        if hasattr(self.args, "no_augment_color"):
             deprecation_warning("`-nac`, ``--no-augment-color``",
                                 additional_info="This option will be available within training "
                                                 "config settings (/config/train.ini).")
