@@ -385,7 +385,7 @@ class Samples():
                 feed[0] = np.squeeze(self.resize_samples(side, feed[:1], target_scale), axis=0)
                 preds = self.get_predictions(side, other_side, feed)
                 image_grid, header_width = self.create_image_grid(side, samples, preds)
-                header = self.get_headers(side.upper(), other_side.upper(), header_width)
+                header = self.get_headers([side.upper(), other_side.upper()], header_width)
                 display[side] = np.concatenate([header, image_grid], axis=0)
             full_display = np.concatenate([display["a"], display["b"]], axis=1)
             full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
@@ -492,9 +492,9 @@ class Samples():
         logger.debug("Overlayed foreground. Shape: %s", new_images.shape)
         return new_images
 
-    def get_headers(self, side, other_side, width):
+    def get_headers(self, sides, width):
         """ Set headers for images """
-        logger.debug("side: '%s', other_side: '%s', width: %s", side, other_side, width)
+        logger.debug("side: '%s', other_side: '%s', width: %s", sides[0], sides[1], width)
 
         def text_size(text, font):
             """ Helper function for list comprehension """
@@ -503,24 +503,23 @@ class Samples():
 
         height = int(64. * self.scaling)
         offsets = [0, width, width * 2]
-        header_box = np.ones((height, width * 3, 3), np.float32)
-        texts = ["Target {0}".format(side),
-                 "{0} > {0}".format(side),
-                 "{0} > {1}".format(side, other_side)]
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        text_sizes = [text_size(text, font) for text in texts]
+        header = np.ones((height, width * 3, 3), dtype='float32')
+        texts = ["Target {0}".format(sides[0]),
+                 "{0} > {0}".format(sides[0]),
+                 "{0} > {1}".format(sides[0], sides[1])]
+        text_sizes = [text_size(text, cv2.FONT_HERSHEY_SIMPLEX) for text in texts]
         y_texts = [int((height + text[1]) / 2) for text in text_sizes]
         x_texts = [int((width - text[0]) / 2 + off) for off, text in zip(offsets, text_sizes)]
         for text_x, text_y, text in zip(x_texts, y_texts, texts):
-            cv2.putText(header_box,
+            cv2.putText(header,
                         text,
                         (text_x, text_y),
-                        font,
+                        cv2.FONT_HERSHEY_SIMPLEX,
                         self.scaling * 0.8,
                         (0., 0., 0.),
                         1,
                         lineType=cv2.LINE_AA)
-        header = np.concatenate([header_box, header_box], axis=1)
+        header = np.concatenate([header, header], axis=1)
 
         logger.debug("height: %s, total_width: %s", height, width * 3)
         logger.debug("texts: %s, text sizes: %s, text_x: %s, text_y: %s",
