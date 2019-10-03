@@ -198,9 +198,9 @@ class TrainerBase():
                 self.print_loss(self.pingpong.loss)
 
             if do_preview:
-                samples = self.samples.show_sample()
-                if samples is not None:
-                    viewer(samples, "Training - 'S': Save Now. 'ENTER': Save and Quit")
+                preview = self.samples.create_preview_window()
+                if preview is not None:
+                    viewer(preview, "Training - 'S': Save Now. 'ENTER': Save and Quit")
 
             if do_timelapse:
                 self.timelapse.output_timelapse()
@@ -373,216 +373,160 @@ class Samples():
         self.scaling = scaling
         logger.debug("Initialized %s", self.__class__.__name__)
 
-    def show_sample(self):
+    def create_preview_window(self):
         """ Display preview data """
-        if len(self.images) != 2:
+        if len(self.images) == 2:
+            logger.debug("Showing sample")
+            display = dict()
+            for side, samples in self.images.items():
+                other_side = "a" if side == "b" else "b"
+                feed = samples[1:]
+                target_scale = self.model.input_shape[0] / feed[0].shape[1]
+                feed[0] = np.squeeze(self.resize_samples(side, feed[:1], target_scale), axis=0)
+                preds = self.get_predictions(side, other_side, feed)
+                image_grid, header_width = self.create_image_grid(side, samples, preds)
+                header = self.get_headers(side.upper(), other_side.upper(), header_width)
+                display[side] = np.concatenate([header, image_grid], axis=0)
+            full_display = np.concatenate([display["a"], display["b"]], axis=1)
+            full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
+            logger.debug("Compiled sample")
+        else:
+            full_display = None
             logger.debug("Ping Pong training - Only one side trained. Aborting preview")
-            return None
-        logger.debug("Showing sample")
-        feeds = dict()
-        figures = dict()
-        headers = dict()
-        for side, samples in self.images.items():
-            faces = samples[1]
-            if self.model.input_shape[0] / faces.shape[1] != 1.0:
-                feeds[side] = self.resize_sample(side, faces, self.model.input_shape[0])
-                feeds[side] = feeds[side].reshape((-1, ) + self.model.input_shape)
-            else:
-                feeds[side] = faces
-            if self.use_mask:
-                mask = samples[-1]
-                feeds[side] = [feeds[side], mask]
-
-        preds = self.get_predictions(feeds["a"], feeds["b"])
-
-        for side, samples in self.images.items():
-            other_side = "a" if side == "b" else "b"
-            predictions = [preds["{0}_{0}".format(side)],
-                           preds["{}_{}".format(other_side, side)]]
-            display = self.to_full_frame(side, samples, predictions)
-            headers[side] = self.get_headers(side, display[0].shape[1])
-            figures[side] = np.stack([display[0], display[1], display[2], ], axis=1)
-            if self.images[side][0].shape[0] % 2 == 1:
-                figures[side] = np.concatenate([figures[side],
-                                                np.expand_dims(figures[side][0], 0)])
-
-        width = 4
-        side_cols = width // 2
-        if side_cols != 1:
-            headers = self.duplicate_headers(headers, side_cols)
-
-        header = np.concatenate([headers["a"], headers["b"]], axis=1)
-        figure = np.concatenate([figures["a"], figures["b"]], axis=0)
-        height = int(figure.shape[0] / width)
-        figure = figure.reshape((width, height) + figure.shape[1:])
-        figure = stack_images(figure)
-        figure = np.vstack((header, figure))
-
-        logger.debug("Compiled sample")
-        return np.clip(figure * 255, 0, 255).astype('uint8')
+        return full_display
 
     @staticmethod
-    def resize_sample(side, sample, target_size):
+    def resize_samples(side, samples, scale):
         """ Resize samples where predictor expects different shape from processed image """
-        scale = target_size / sample.shape[1]
-        if scale == 1.0:
-            return sample
-        logger.debug("Resizing sample: (side: '%s', sample.shape: %s, target_size: %s, scale: %s)",
-                     side, sample.shape, target_size, scale)
-        interpn = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA  # pylint: disable=no-member
-        retval = np.array([cv2.resize(img,  # pylint: disable=no-member
-                                      (target_size, target_size),
-                                      interpn)
-                           for img in sample])
-        logger.debug("Resized sample: (side: '%s' shape: %s)", side, retval.shape)
-        return retval
+        if scale != 1.:
+            logger.debug("Resizing samples: (side: '%s', sample.shape: %s, scale: %s)",
+                         side, samples[0].shape, scale)
+            interp = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA
+            samples = np.stack([np.array([cv2.resize(img,
+                                                     None,
+                                                     fx=scale,
+                                                     fy=scale,
+                                                     interpolation=interp)
+                                          for img in imgs])
+                                for imgs in samples])
+            logger.debug("Resized sample: (side: '%s' shape: %s)", side, samples[0].shape)
+        return samples
 
-    def get_predictions(self, feed_a, feed_b):
+    def get_predictions(self, side, other_side, feed):
         """ Return the sample predictions from the model """
-        logger.debug("Getting Predictions")
-        preds = dict()
-        preds["a_a"] = self.model.predictors["a"].predict(feed_a)
-        preds["b_a"] = self.model.predictors["b"].predict(feed_a)
-        preds["a_b"] = self.model.predictors["a"].predict(feed_b)
-        preds["b_b"] = self.model.predictors["b"].predict(feed_b)
-        # Get the returned largest image from predictors that emit multiple items
-        if not isinstance(preds["a_a"], np.ndarray):
-            for key, val in preds.items():
-                preds[key] = val[self.model.largest_face_index]
-        logger.debug("Returning predictions: %s", {key: val.shape for key, val in preds.items()})
-        return preds
+        logger.debug("Getting Predictions for side %s", side)
+        reconstructions = self.model.predictors[side].predict(feed)
+        swaps = self.model.predictors[other_side].predict(feed)
+        if not isinstance(reconstructions, np.ndarray):
+            reconstructions = reconstructions[self.model.largest_face_index]
+            swaps = swaps[self.model.largest_face_index]
+        logger.debug("Returning predictions: %s", swaps.shape)
+        return [reconstructions, swaps]
 
-    def to_full_frame(self, side, samples, predictions):
-        """ Patch the images into the full frame """
+    def create_image_grid(self, side, samples, predictions):
+        """ Patch the images into the full frame / image grid """
         logger.debug("side: '%s', number of sample arrays: %s, prediction.shapes: %s)",
                      side, len(samples), [pred.shape for pred in predictions])
-        full, faces = samples[:2]
-        images = [faces] + predictions
-        full_size = full.shape[1]
-        target_size = int(full_size * self.coverage_ratio)
-        if target_size != full_size:
-            frame = self.frame_overlay(full, target_size, (0, 0, 255))
 
-        if self.use_mask:
-            images = self.compile_masked(images, samples[-1])
-        images = [self.resize_sample(side, image, target_size) for image in images]
-        if target_size != full_size:
-            images = [self.overlay_foreground(frame, image) for image in images]
-        if self.scaling != 1.0:
-            new_size = int(full_size * self.scaling)
-            images = [self.resize_sample(side, image, new_size) for image in images]
+        frames, originals = samples[:2]
+        masks = np.repeat(samples[2], 3, axis=-1) if self.use_mask else np.ones_like(originals)
+        unadjusted_scale = frames.shape[1] / originals.shape[1]
+        target_scale = unadjusted_scale * self.coverage_ratio
+
+        images = np.concatenate([originals[None, ...], predictions], axis=0)
+        images = self.tint_masked_areas(images, masks)
+        images = self.resize_samples(side, images, target_scale)
+        if self.coverage_ratio != 1.:
+            frames = self.frame_overlay(frames)
+            images = self.overlay_foreground(frames, images)
+        images = self.resize_samples(side, images, self.scaling)
+        header_width = images[0].shape[1]
+        images = np.concatenate(list(images), axis=2)
+        images = np.concatenate(list(images), axis=0)
+        images = np.concatenate(np.split(images, 2), axis=1)
+        return images, header_width
+
+    def frame_overlay(self, frames):
+        """ Add roi frame to a backfround image """
+        logger.debug("full_size: %s", frames.shape[1])
+        color = (0., 0., 1.)
+        line_width = 3
+        full_size = frames.shape[1]
+        padding = int(full_size * (1. - self.coverage_ratio)) // 2
+        length = int(full_size * self.coverage_ratio) // 4
+        t_l = padding - line_width
+        b_r = full_size - padding + line_width
+
+        top_left = slice(t_l, t_l + length), slice(t_l, t_l + length)
+        bot_left = slice(b_r - length, b_r), slice(t_l, t_l + length)
+        top_right = slice(b_r - length, b_r), slice(b_r - length, b_r)
+        bot_right = slice(t_l, t_l + length), slice(b_r - length, b_r)
+
+        for roi in [top_left, bot_left, top_right, bot_right]:
+            frames[:, roi[0], roi[1]] = color
+        logger.debug("Overlayed background. Shape: %s", frames.shape)
+        return frames
+
+    @staticmethod
+    def tint_masked_areas(images, masks):
+        """ Add the mask to the faces for masked preview """
+        replace_area = (np.rint(masks) == 0.)
+        red_area = np.repeat(replace_area[None, ..., 0], 3, axis=0)
+        for prediction in images[1:]:
+            prediction[replace_area] = images[0][replace_area]
+        images[..., -1][red_area] += 0.3
+        logger.debug("masked shapes: %s", [faces.shape for faces in images[0]])
         return images
 
     @staticmethod
-    def frame_overlay(images, target_size, color):
-        """ Add roi frame to a backfround image """
-        logger.debug("full_size: %s, target_size: %s, color: %s",
-                     images.shape[1], target_size, color)
-        new_images = list()
-        full_size = images.shape[1]
-        padding = (full_size - target_size) // 2
-        length = target_size // 4
-        t_l, b_r = (padding, full_size - padding)
-        for img in images:
-            cv2.rectangle(img,  # pylint: disable=no-member
-                          (t_l, t_l),
-                          (t_l + length, t_l + length),
-                          color,
-                          3)
-            cv2.rectangle(img,  # pylint: disable=no-member
-                          (b_r, t_l),
-                          (b_r - length, t_l + length),
-                          color,
-                          3)
-            cv2.rectangle(img,  # pylint: disable=no-member
-                          (b_r, b_r),
-                          (b_r - length,
-                           b_r - length),
-                          color,
-                          3)
-            cv2.rectangle(img,  # pylint: disable=no-member
-                          (t_l, b_r),
-                          (t_l + length, b_r - length),
-                          color,
-                          3)
-            new_images.append(img)
-        retval = np.array(new_images)
-        logger.debug("Overlayed background. Shape: %s", retval.shape)
-        return retval
-
-    @staticmethod
-    def compile_masked(faces, masks):
-        """ Add the mask to the faces for masked preview """
-        retval = list()
-        masks3 = np.tile(1 - np.rint(masks), 3)
-        for mask in masks3:
-            mask[np.where((mask == [1., 1., 1.]).all(axis=2))] = [0., 0., 1.]
-        for previews in faces:
-            images = np.array([cv2.addWeighted(img, 1.0,  # pylint: disable=no-member
-                                               masks3[idx], 0.3,
-                                               0)
-                               for idx, img in enumerate(previews)])
-            retval.append(images)
-        logger.debug("masked shapes: %s", [faces.shape for faces in retval])
-        return retval
-
-    @staticmethod
     def overlay_foreground(backgrounds, foregrounds):
-        """ Overlay the training images into the center of the background """
-        offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
-        new_images = list()
-        for idx, img in enumerate(backgrounds):
-            img[offset:offset + foregrounds[idx].shape[0],
-                offset:offset + foregrounds[idx].shape[1]] = foregrounds[idx]
-            new_images.append(img)
-        retval = np.array(new_images)
-        logger.debug("Overlayed foreground. Shape: %s", retval.shape)
-        return retval
+        """ Overlay the masked faces into the center of the background """
+        backgrounds[..., -1:] += 0.3
+        offset = (backgrounds.shape[1] - foregrounds.shape[2]) // 2
+        slice_y = slice(offset, offset + foregrounds.shape[2])
+        slice_x = slice(offset, offset + foregrounds.shape[3])
+        new_images = np.repeat(backgrounds[None, ...], 3, axis=0)
+        for background, foreground in zip(new_images, foregrounds):
+            for fore, back in zip(foreground, background):
+                back[slice_y, slice_x, :] = fore
+        logger.debug("Overlayed foreground. Shape: %s", new_images.shape)
+        return new_images
 
-    def get_headers(self, side, width):
+    def get_headers(self, side, other_side, width):
         """ Set headers for images """
-        logger.debug("side: '%s', width: %s",
-                     side, width)
-        titles = ("Original", "Swap") if side == "a" else ("Swap", "Original")
-        side = side.upper()
-        height = int(64 * self.scaling)
-        total_width = width * 3
-        logger.debug("height: %s, total_width: %s", height, total_width)
-        font = cv2.FONT_HERSHEY_SIMPLEX  # pylint: disable=no-member
-        texts = ["{} ({})".format(titles[0], side),
-                 "{0} > {0}".format(titles[0]),
-                 "{} > {}".format(titles[0], titles[1])]
-        text_sizes = [cv2.getTextSize(texts[idx],  # pylint: disable=no-member
-                                      font,
-                                      self.scaling * 0.8,
-                                      1)[0]
-                      for idx in range(len(texts))]
-        text_y = int((height + text_sizes[0][1]) / 2)
-        text_x = [int((width - text_sizes[idx][0]) / 2) + width * idx
-                  for idx in range(len(texts))]
-        logger.debug("texts: %s, text_sizes: %s, text_x: %s, text_y: %s",
-                     texts, text_sizes, text_x, text_y)
-        header_box = np.ones((height, total_width, 3), np.float32)
-        for idx, text in enumerate(texts):
-            cv2.putText(header_box,  # pylint: disable=no-member
+        logger.debug("side: '%s', other_side: '%s', width: %s", side, other_side, width)
+
+        def text_size(text, font):
+            """ Helper function for list comprehension """
+            [text_width, text_height] = cv2.getTextSize(text, font, self.scaling * 0.8, 1)[0]
+            return [text_width, text_height]
+
+        height = int(64. * self.scaling)
+        offsets = [0, width, width * 2]
+        header_box = np.ones((height, width * 3, 3), np.float32)
+        texts = ["Target {0}".format(side),
+                 "{0} > {0}".format(side),
+                 "{0} > {1}".format(side, other_side)]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text_sizes = [text_size(text, font) for text in texts]
+        y_texts = [int((height + text[1]) / 2) for text in text_sizes]
+        x_texts = [int((width - text[0]) / 2 + off) for off, text in zip(offsets, text_sizes)]
+        for text_x, text_y, text in zip(x_texts, y_texts, texts):
+            cv2.putText(header_box,
                         text,
-                        (text_x[idx], text_y),
+                        (text_x, text_y),
                         font,
                         self.scaling * 0.8,
-                        (0, 0, 0),
+                        (0., 0., 0.),
                         1,
-                        lineType=cv2.LINE_AA)  # pylint: disable=no-member
-        logger.debug("header_box.shape: %s", header_box.shape)
-        return header_box
+                        lineType=cv2.LINE_AA)
+        header = np.concatenate([header_box, header_box], axis=1)
 
-    @staticmethod
-    def duplicate_headers(headers, columns):
-        """ Duplicate headers for the number of columns displayed """
-        for side, header in headers.items():
-            duped = tuple([header for _ in range(columns)])
-            headers[side] = np.concatenate(duped, axis=1)
-            logger.debug("side: %s header.shape: %s", side, header.shape)
-        return headers
+        logger.debug("height: %s, total_width: %s", height, width * 3)
+        logger.debug("texts: %s, text sizes: %s, text_x: %s, text_y: %s",
+                     texts, text_sizes, x_texts, y_texts)
+        logger.debug("header shape: %s", header.shape)
+        return header
 
 
 class Timelapse():
@@ -626,7 +570,7 @@ class Timelapse():
     def output_timelapse(self):
         """ Set the timelapse dictionary """
         logger.debug("Ouputting timelapse")
-        image = self.samples.show_sample()
+        image = self.samples.create_preview_window()
         if image is None:
             return
         filename = os.path.join(self.output_file, str(int(time.time())) + ".jpg")
@@ -695,25 +639,3 @@ class Landmarks():
                 detected_face.load_aligned(None, size=self.size)
                 landmarks[detected_face.hash] = detected_face.aligned_landmarks
         return landmarks
-
-
-def stack_images(images):
-    """ Stack images """
-    logger.debug("Stack images")
-
-    def get_transpose_axes(num):
-        if num % 2 == 0:
-            logger.debug("Even number of images to stack")
-            y_axes = list(range(1, num - 1, 2))
-            x_axes = list(range(0, num - 1, 2))
-        else:
-            logger.debug("Odd number of images to stack")
-            y_axes = list(range(0, num - 1, 2))
-            x_axes = list(range(1, num - 1, 2))
-        return y_axes, x_axes, [num - 1]
-
-    images_shape = np.array(images.shape)
-    new_axes = get_transpose_axes(len(images_shape))
-    new_shape = [np.prod(images_shape[x]) for x in new_axes]
-    logger.debug("Stacked images")
-    return np.transpose(images, axes=np.concatenate(new_axes)).reshape(new_shape)
