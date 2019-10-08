@@ -35,6 +35,7 @@ from lib.alignments import Alignments
 from lib.faces_detect import DetectedFace
 from lib.training_data import TrainingDataGenerator
 from lib.utils import FaceswapError, get_folder, get_image_paths
+from lib.image import read_image
 from plugins.train._config import Config
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -57,7 +58,7 @@ class TrainerBase():
         self.model.state.add_session_batchsize(batch_size)
         self.images = images
         self.sides = sorted(key for key in self.images.keys())
-
+        self.frame_size = read_image(self.images['a'][0]).shape[0]
         self.process_training_opts()
         self.pingpong = PingPong(model, self.sides)
 
@@ -72,6 +73,7 @@ class TrainerBase():
         self.tensorboard = self.set_tensorboard()
         self.samples = Samples(self.model,
                                self.use_mask,
+                               self.frame_size,
                                self.model.training_opts["coverage_ratio"],
                                self.model.training_opts["preview_scaling"])
         self.timelapse = Timelapse(self.model,
@@ -363,31 +365,33 @@ class Batcher():
 
 class Samples():
     """ Display samples for preview and timelapse """
-    def __init__(self, model, use_mask, coverage_ratio, scaling=1.0):
+    def __init__(self, model, use_mask, frame_size, coverage_ratio, scaling=1.0):
         logger.debug("Initializing %s: model: '%s', use_mask: %s, coverage_ratio: %s)",
                      self.__class__.__name__, model, use_mask, coverage_ratio)
         self.model = model
         self.use_mask = use_mask
         self.images = dict()
+        self.frame_size = frame_size
         self.coverage_ratio = coverage_ratio
         self.scaling = scaling
+        self.header = self.get_headers(['A', 'B'], frame_size)
+
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def create_preview_window(self):
         """ Display preview data """
         if len(self.images) == 2:
             logger.debug("Showing sample")
-            display = dict()
+            image_grid = dict()
             for side, samples in self.images.items():
                 other_side = "a" if side == "b" else "b"
                 feed = samples[1:]
                 target_scale = self.model.input_shape[0] / feed[0].shape[1]
                 feed[0] = np.squeeze(self.resize_samples(side, feed[:1], target_scale), axis=0)
                 preds = self.get_predictions(side, other_side, feed)
-                image_grid, header_width = self.create_image_grid(side, samples, preds)
-                header = self.get_headers([side.upper(), other_side.upper()], header_width)
-                display[side] = np.concatenate([header, image_grid], axis=0)
-            full_display = np.concatenate([display["a"], display["b"]], axis=1)
+                image_grid[side] = self.create_image_grid(side, samples, preds)
+            full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1)
+            full_display = np.concatenate([self.header, full_grid], axis=0)
             full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
             logger.debug("Compiled sample")
         else:
@@ -430,21 +434,19 @@ class Samples():
 
         frames, originals = samples[:2]
         masks = np.repeat(samples[2], 3, axis=-1) if self.use_mask else np.ones_like(originals)
-        unadjusted_scale = frames.shape[1] / originals.shape[1]
-        target_scale = unadjusted_scale * self.coverage_ratio
+        img_height = self.frame_size
+        # img_height = int(frames.shape[1] * self.scaling)
+        target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
 
-        images = np.concatenate([originals[None, ...], predictions], axis=0)
+        images = np.concatenate([originals[None, ...], predictions], axis=2)
         images = self.tint_masked_areas(images, masks)
         images = self.resize_samples(side, images, target_scale)
         if self.coverage_ratio != 1.:
             frames = self.frame_overlay(frames)
             images = self.overlay_foreground(frames, images)
         images = self.resize_samples(side, images, self.scaling)
-        header_width = images[0].shape[1]
-        images = np.concatenate(list(images), axis=2)
-        images = np.concatenate(list(images), axis=0)
-        images = np.concatenate(np.split(images, 2), axis=1)
-        return images, header_width
+        images = images.reshape((img_height * 7, img_height * 6, 3))
+        return images
 
     def frame_overlay(self, frames):
         """ Add roi frame to a backfround image """
@@ -492,7 +494,7 @@ class Samples():
         logger.debug("Overlayed foreground. Shape: %s", new_images.shape)
         return new_images
 
-    def get_headers(self, sides, width):
+    def get_headers(self, width):
         """ Set headers for images """
         logger.debug("side: '%s', other_side: '%s', width: %s", sides[0], sides[1], width)
 
@@ -503,29 +505,30 @@ class Samples():
 
         height = int(64. * self.scaling)
         offsets = [0, width, width * 2]
-        header = np.ones((height, width * 3, 3), dtype='float32')
-        texts = ["Target {0}".format(sides[0]),
-                 "{0} > {0}".format(sides[0]),
-                 "{0} > {1}".format(sides[0], sides[1])]
-        text_sizes = [text_size(text, cv2.FONT_HERSHEY_SIMPLEX) for text in texts]
-        y_texts = [int((height + text[1]) / 2) for text in text_sizes]
-        x_texts = [int((width - text[0]) / 2 + off) for off, text in zip(offsets, text_sizes)]
-        for text_x, text_y, text in zip(x_texts, y_texts, texts):
-            cv2.putText(header,
-                        text,
-                        (text_x, text_y),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        self.scaling * 0.8,
-                        (0., 0., 0.),
-                        1,
-                        lineType=cv2.LINE_AA)
-        header = np.concatenate([header, header], axis=1)
+        header_a = np.ones((height, width * 3, 3), dtype='float32')
+        header_b = np.ones((height, width * 3, 3), dtype='float32')
+        for sides, header in zip([['A', 'B'], ['B', 'A']], [header_a, header_b]):
+            texts = ["Target {0}".format(sides[0]),
+                     "{0} > {0}".format(sides[0]),
+                     "{0} > {1}".format(sides[0], sides[1])]
+            text_sizes = [text_size(text, cv2.FONT_HERSHEY_SIMPLEX) for text in texts]
+            y_texts = [int((height + text[1]) / 2) for text in text_sizes]
+            x_texts = [int((width - text[0]) / 2 + off) for off, text in zip(offsets, text_sizes)]
+            for text_x, text_y, text in zip(x_texts, y_texts, texts):
+                cv2.putText(header,
+                            text,
+                            (text_x, text_y),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            self.scaling * 0.8,
+                            (0., 0., 0.),
+                            1,
+                            lineType=cv2.LINE_AA)
+        full_header = np.concatenate([header_a, header_a, header_b, header_b], axis=1)
 
-        logger.debug("height: %s, total_width: %s", height, width * 3)
         logger.debug("texts: %s, text sizes: %s, text_x: %s, text_y: %s",
                      texts, text_sizes, x_texts, y_texts)
-        logger.debug("header shape: %s", header.shape)
-        return header
+        logger.debug("header shape: %s", full_header.shape)
+        return full_header
 
 
 class Timelapse():
