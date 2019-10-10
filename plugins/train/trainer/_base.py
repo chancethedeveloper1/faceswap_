@@ -392,12 +392,8 @@ class Samples():
                 preds = self.get_predictions(side, other_side, feed)
                 image_grid[side] = self.create_image_grid(side, samples, preds)
             full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1)
-            print(full_grid.shape)
             full_display = np.concatenate([self.header, full_grid], axis=0)
-            print(full_display.shape)
-            print("scaling : ", self.scaling)
             full_display = np.squeeze(self.resize_samples('a', full_display[None, ...], self.scaling))
-            print(full_display.shape)
             full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
             logger.debug("Compiled sample")
         else:
@@ -438,24 +434,14 @@ class Samples():
         target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
         images = np.concatenate([originals, *predictions], axis=0)
         masks = np.repeat(samples[2], 3, axis=3) if self.use_mask else np.ones_like(images)
-        print(frames.shape)
-        print(images.shape)
         images = self.tint_masked_areas(originals, images, masks)
-        print(images.shape)
         images = self.resize_samples(side, images, target_scale)
-        print(images.shape)
         if self.coverage_ratio != 1.:
             frames = self.frame_overlay(frames)
             images = self.overlay_foreground(frames, images)
-        print(images.shape)
-        images_list = np.split(images, 7, axis=0)
-        for index, imgs in enumerate(images_list):
-            print("imgs: ", imgs.shape)
-            images_list[index] = imgs.reshape(self.frame_size, self.frame_size * 6, 3)
-        print("imgs2 : ", images_list[0].shape)
-        images = np.concatenate(images_list, axis=0)
-        #images = images.reshape((self.frame_size * 7, self.frame_size * 6, 3))
-        print(images.shape)
+        images = np.concatenate(np.split(images, 3, axis=0), axis=2)
+        images = np.concatenate(np.split(images, 2, axis=0), axis=2)
+        images = images.reshape((self.frame_size * 7, self.frame_size * 6, 3))
         return images
 
     def frame_overlay(self, frames):
@@ -483,7 +469,7 @@ class Samples():
     def tint_masked_areas(originals, images, masks):
         """ Add the mask to the faces for masked preview """
         replace_area = (np.rint(masks) == 0.)
-        originals = np.repeat(originals, 3, axis=2)
+        originals = np.concatenate((originals, originals, originals), axis=2)
         images[replace_area] = originals[replace_area]
         images[..., -1][replace_area[..., 0]] += 0.3
         logger.debug("masked shapes: %s", originals.shape[1:])
@@ -496,7 +482,7 @@ class Samples():
         offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
         slice_y = slice(offset, offset + foregrounds.shape[1])
         slice_x = slice(offset, offset + foregrounds.shape[2])
-        backgrounds = np.repeat(backgrounds, 3, axis=0)
+        backgrounds = np.concatenate((backgrounds, backgrounds, backgrounds), axis=0)
         for background, foreground in zip(backgrounds, foregrounds):
             background[slice_y, slice_x] = foreground
         logger.debug("Foreground inserted. Shape: %s", backgrounds.shape)
@@ -547,7 +533,7 @@ class Timelapse():
                      self.__class__.__name__, model, use_mask, frame_size, coverage_ratio,
                      preview_images, batchers)
         self.preview_images = preview_images
-        self.samples = Samples(model, use_mask, frame_size, coverage_ratio)
+        self.samples = Samples(model, use_mask, frame_size, coverage_ratio, 1.0)
         self.model = model
         self.batchers = batchers
         self.output_file = None
