@@ -371,11 +371,10 @@ class Samples():
                      self.__class__.__name__, model, use_mask, coverage_ratio)
         self.model = model
         self.use_mask = use_mask
-        self.frame_size = frame_size
         self.images = dict()
         self.coverage_ratio = coverage_ratio
         self.scaling = scaling
-        self.header = self._get_headers(frame_size)
+        self.header = self._get_headers(int(frame_size * self.scaling))
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -392,8 +391,8 @@ class Samples():
                 preds = self.get_predictions(side, other_side, feed)
                 image_grid[side] = self.create_image_grid(side, samples, preds)
             full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1)
-            full_display = np.concatenate([self.header, full_grid], axis=0)
-            full_display = np.squeeze(self.resize_samples('a', full_display[None, ...], self.scaling))
+            full_display = np.squeeze(self.resize_samples("both", full_grid[None, ...], self.scaling))
+            full_display = np.concatenate([self.header, full_display], axis=0)
             full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
             logger.debug("Compiled sample")
         else:
@@ -411,6 +410,8 @@ class Samples():
             gen = (cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
                    for img in samples)
             samples = np.array(tuple(gen))
+            #samples = np.array([cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
+            #                   for img in samples])
             logger.debug("Resized sample: (side: '%s' shape: %s)", side, samples[0].shape)
         return samples
 
@@ -432,16 +433,15 @@ class Samples():
 
         frames, originals = samples[:2]
         target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
-        images = np.concatenate([originals, *predictions], axis=0)
-        masks = np.repeat(samples[2], 3, axis=3) if self.use_mask else np.ones_like(images)
-        images = self.tint_masked_areas(originals, images, masks)
+        masks = np.repeat(samples[2], 3, axis=3) if self.use_mask else np.ones_like(originals)
+        images = self.tint_masked_areas(originals, predictions, masks)
         images = self.resize_samples(side, images, target_scale)
         if self.coverage_ratio != 1.:
             frames = self.frame_overlay(frames)
             images = self.overlay_foreground(frames, images)
         images = np.concatenate(np.split(images, 3, axis=0), axis=2)
-        images = np.concatenate(np.split(images, 2, axis=0), axis=2)
-        images = images.reshape((self.frame_size * 7, self.frame_size * 6, 3))
+        images = np.concatenate(list(images), axis=0)
+        images = np.concatenate(np.split(images, 2), axis=1)
         return images
 
     def frame_overlay(self, frames):
@@ -469,9 +469,10 @@ class Samples():
     def tint_masked_areas(originals, images, masks):
         """ Add the mask to the faces for masked preview """
         replace_area = (np.rint(masks) == 0.)
-        originals = np.concatenate((originals, originals, originals), axis=2)
-        images[replace_area] = originals[replace_area]
-        images[..., -1][replace_area[..., 0]] += 0.3
+        originals[..., 2][replace_area[..., 0]] += 0.3
+        images[0][replace_area] = originals[replace_area]
+        images[1][replace_area] = originals[replace_area]
+        images = np.concatenate([originals, images[0], images[1]], axis=0)
         logger.debug("masked shapes: %s", originals.shape[1:])
         return images
 
@@ -494,10 +495,10 @@ class Samples():
 
         def text_size(text, font):
             """ Helper function for list comprehension """
-            [text_width, text_height] = cv2.getTextSize(text, font, 0.8, 1)[0]
+            [text_width, text_height] = cv2.getTextSize(text, font, 0.8 * self.scaling, 1)[0]
             return [text_width, text_height]
 
-        height = 64
+        height = int(64. * self.scaling)
         offsets = [0, width, width * 2]
         header_a = np.ones((height, width * 3, 3), dtype='float32')
         header_b = np.ones((height, width * 3, 3), dtype='float32')
@@ -513,7 +514,7 @@ class Samples():
                             text,
                             (text_x, text_y),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,
+                            0.8 * self.scaling,
                             (0., 0., 0.),
                             1,
                             lineType=cv2.LINE_AA)
