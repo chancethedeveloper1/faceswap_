@@ -78,6 +78,7 @@ class TrainerBase():
                                self.model.training_opts["preview_scaling"])
         self.timelapse = Timelapse(self.model,
                                    self.use_mask,
+                                   self.frame_size,
                                    self.model.training_opts["coverage_ratio"],
                                    self.config.get("preview_images", 14),
                                    self.batchers)
@@ -365,16 +366,16 @@ class Batcher():
 
 class Samples():
     """ Display samples for preview and timelapse """
-    def __init__(self, model, use_mask, frame_size, coverage_ratio, scaling=1.0):
+    def __init__(self, model, use_mask, frame_size, coverage_ratio, scaling):
         logger.debug("Initializing %s: model: '%s', use_mask: %s, coverage_ratio: %s)",
                      self.__class__.__name__, model, use_mask, coverage_ratio)
         self.model = model
         self.use_mask = use_mask
-        self.images = dict()
         self.frame_size = frame_size
+        self.images = dict()
         self.coverage_ratio = coverage_ratio
         self.scaling = scaling
-        self.header = self.get_headers(['A', 'B'], frame_size)
+        self.header = self._get_headers(frame_size)
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -387,11 +388,16 @@ class Samples():
                 other_side = "a" if side == "b" else "b"
                 feed = samples[1:]
                 target_scale = self.model.input_shape[0] / feed[0].shape[1]
-                feed[0] = np.squeeze(self.resize_samples(side, feed[:1], target_scale), axis=0)
+                feed[0] = self.resize_samples(side, feed[0], target_scale)
                 preds = self.get_predictions(side, other_side, feed)
                 image_grid[side] = self.create_image_grid(side, samples, preds)
             full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1)
+            print(full_grid.shape)
             full_display = np.concatenate([self.header, full_grid], axis=0)
+            print(full_display.shape)
+            print("scaling : ", self.scaling)
+            full_display = np.squeeze(self.resize_samples('a', full_display[None, ...], self.scaling))
+            print(full_display.shape)
             full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
             logger.debug("Compiled sample")
         else:
@@ -406,13 +412,9 @@ class Samples():
             logger.debug("Resizing samples: (side: '%s', sample.shape: %s, scale: %s)",
                          side, samples[0].shape, scale)
             interp = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA
-            samples = np.stack([np.array([cv2.resize(img,
-                                                     None,
-                                                     fx=scale,
-                                                     fy=scale,
-                                                     interpolation=interp)
-                                          for img in imgs])
-                                for imgs in samples])
+            gen = (cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
+                   for img in samples)
+            samples = np.array(tuple(gen))
             logger.debug("Resized sample: (side: '%s' shape: %s)", side, samples[0].shape)
         return samples
 
@@ -433,19 +435,27 @@ class Samples():
                      side, len(samples), [pred.shape for pred in predictions])
 
         frames, originals = samples[:2]
-        masks = np.repeat(samples[2], 3, axis=-1) if self.use_mask else np.ones_like(originals)
-        img_height = self.frame_size
-        # img_height = int(frames.shape[1] * self.scaling)
         target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
-
-        images = np.concatenate([originals[None, ...], predictions], axis=2)
-        images = self.tint_masked_areas(images, masks)
+        images = np.concatenate([originals, *predictions], axis=0)
+        masks = np.repeat(samples[2], 3, axis=3) if self.use_mask else np.ones_like(images)
+        print(frames.shape)
+        print(images.shape)
+        images = self.tint_masked_areas(originals, images, masks)
+        print(images.shape)
         images = self.resize_samples(side, images, target_scale)
+        print(images.shape)
         if self.coverage_ratio != 1.:
             frames = self.frame_overlay(frames)
             images = self.overlay_foreground(frames, images)
-        images = self.resize_samples(side, images, self.scaling)
-        images = images.reshape((img_height * 7, img_height * 6, 3))
+        print(images.shape)
+        images_list = np.split(images, 7, axis=0)
+        for index, imgs in enumerate(images_list):
+            print("imgs: ", imgs.shape)
+            images_list[index] = imgs.reshape(self.frame_size, self.frame_size * 6, 3)
+        print("imgs2 : ", images_list[0].shape)
+        images = np.concatenate(images_list, axis=0)
+        #images = images.reshape((self.frame_size * 7, self.frame_size * 6, 3))
+        print(images.shape)
         return images
 
     def frame_overlay(self, frames):
@@ -470,40 +480,38 @@ class Samples():
         return frames
 
     @staticmethod
-    def tint_masked_areas(images, masks):
+    def tint_masked_areas(originals, images, masks):
         """ Add the mask to the faces for masked preview """
         replace_area = (np.rint(masks) == 0.)
-        red_area = np.repeat(replace_area[None, ..., 0], 3, axis=0)
-        for prediction in images[1:]:
-            prediction[replace_area] = images[0][replace_area]
-        images[..., -1][red_area] += 0.3
-        logger.debug("masked shapes: %s", [faces.shape for faces in images[0]])
+        originals = np.repeat(originals, 3, axis=2)
+        images[replace_area] = originals[replace_area]
+        images[..., -1][replace_area[..., 0]] += 0.3
+        logger.debug("masked shapes: %s", originals.shape[1:])
         return images
 
     @staticmethod
     def overlay_foreground(backgrounds, foregrounds):
         """ Overlay the masked faces into the center of the background """
-        backgrounds[..., -1:] += 0.3
-        offset = (backgrounds.shape[1] - foregrounds.shape[2]) // 2
-        slice_y = slice(offset, offset + foregrounds.shape[2])
-        slice_x = slice(offset, offset + foregrounds.shape[3])
-        new_images = np.repeat(backgrounds[None, ...], 3, axis=0)
-        for background, foreground in zip(new_images, foregrounds):
-            for fore, back in zip(foreground, background):
-                back[slice_y, slice_x, :] = fore
-        logger.debug("Overlayed foreground. Shape: %s", new_images.shape)
-        return new_images
+        backgrounds[..., -1] += 0.3
+        offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
+        slice_y = slice(offset, offset + foregrounds.shape[1])
+        slice_x = slice(offset, offset + foregrounds.shape[2])
+        backgrounds = np.repeat(backgrounds, 3, axis=0)
+        for background, foreground in zip(backgrounds, foregrounds):
+            background[slice_y, slice_x] = foreground
+        logger.debug("Foreground inserted. Shape: %s", backgrounds.shape)
+        return backgrounds
 
-    def get_headers(self, width):
+    def _get_headers(self, width):
         """ Set headers for images """
-        logger.debug("side: '%s', other_side: '%s', width: %s", sides[0], sides[1], width)
+        logger.debug("width: %s", width)
 
         def text_size(text, font):
             """ Helper function for list comprehension """
-            [text_width, text_height] = cv2.getTextSize(text, font, self.scaling * 0.8, 1)[0]
+            [text_width, text_height] = cv2.getTextSize(text, font, 0.8, 1)[0]
             return [text_width, text_height]
 
-        height = int(64. * self.scaling)
+        height = 64
         offsets = [0, width, width * 2]
         header_a = np.ones((height, width * 3, 3), dtype='float32')
         header_b = np.ones((height, width * 3, 3), dtype='float32')
@@ -519,7 +527,7 @@ class Samples():
                             text,
                             (text_x, text_y),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            self.scaling * 0.8,
+                            0.8,
                             (0., 0., 0.),
                             1,
                             lineType=cv2.LINE_AA)
@@ -533,12 +541,13 @@ class Samples():
 
 class Timelapse():
     """ Create the timelapse """
-    def __init__(self, model, use_mask, coverage_ratio, preview_images, batchers):
-        logger.debug("Initializing %s: model: %s, use_mask: %s, coverage_ratio: %s, "
-                     "preview_images: %s, batchers: '%s')", self.__class__.__name__, model,
-                     use_mask, coverage_ratio, preview_images, batchers)
+    def __init__(self, model, use_mask, frame_size, coverage_ratio, preview_images, batchers):
+        logger.debug("Initializing %s: model: %s, use_mask: %s, frame_size: %s, "
+                     "coverage_ratio: %s, preview_images: %s, batchers: '%s')",
+                     self.__class__.__name__, model, use_mask, frame_size, coverage_ratio,
+                     preview_images, batchers)
         self.preview_images = preview_images
-        self.samples = Samples(model, use_mask, coverage_ratio)
+        self.samples = Samples(model, use_mask, frame_size, coverage_ratio)
         self.model = model
         self.batchers = batchers
         self.output_file = None
