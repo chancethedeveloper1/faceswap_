@@ -201,7 +201,10 @@ class TrainerBase():
                 self.print_loss(self.pingpong.loss)
 
             if do_preview:
+                time_a = time.time()
                 preview = self.samples.create_preview_window()
+                time_b = time.time()
+                print("time: ", time_b-time_a)
                 if preview is not None:
                     viewer(preview, "Training - 'S': Save Now. 'ENTER': Save and Quit")
 
@@ -374,7 +377,8 @@ class Samples():
         self.images = dict()
         self.coverage_ratio = coverage_ratio
         self.scaling = scaling
-        self.header = self._get_headers(int(frame_size * self.scaling))
+        self.header = self._get_headers(frame_size, scaling)
+        self.slices = self._red_outline_prep(frame_size, coverage_ratio)
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -387,13 +391,13 @@ class Samples():
                 other_side = "a" if side == "b" else "b"
                 feed = samples[1:]
                 target_scale = self.model.input_shape[0] / feed[0].shape[1]
-                feed[0] = self.resize_samples(side, feed[0], target_scale)
-                preds = self.get_predictions(side, other_side, feed)
-                image_grid[side] = self.create_image_grid(side, samples, preds)
-            full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1)
-            full_display = np.squeeze(self.resize_samples("both", full_grid[None, ...], self.scaling))
+                feed[0] = self._resize_samples(side, feed[0], target_scale)
+                preds = self._get_predictions(side, other_side, feed)
+                image_grid[side] = self._create_image_grid(side, samples, preds)
+            full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1) * 255.
+            full_display = np.squeeze(self._resize_samples("both", full_grid[None, ...], self.scaling))
+            full_display = np.clip(full_display, 0., 255.).astype('uint8', copy=False)
             full_display = np.concatenate([self.header, full_display], axis=0)
-            full_display = np.clip(full_display * 255., 0., 255.).astype('uint8')
             logger.debug("Compiled sample")
         else:
             full_display = None
@@ -401,21 +405,18 @@ class Samples():
         return full_display
 
     @staticmethod
-    def resize_samples(side, samples, scale):
+    def _resize_samples(side, samples, scale):
         """ Resize samples where predictor expects different shape from processed image """
         if scale != 1.:
             logger.debug("Resizing samples: (side: '%s', sample.shape: %s, scale: %s)",
                          side, samples[0].shape, scale)
             interp = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA
-            gen = (cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
-                   for img in samples)
-            samples = np.array(tuple(gen))
-            #samples = np.array([cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
-            #                   for img in samples])
+            samples = np.array([cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=interp)
+                               for img in samples])
             logger.debug("Resized sample: (side: '%s' shape: %s)", side, samples[0].shape)
         return samples
 
-    def get_predictions(self, side, other_side, feed):
+    def _get_predictions(self, side, other_side, feed):
         """ Return the sample predictions from the model """
         logger.debug("Getting Predictions for side %s", side)
         reconstructions = self.model.predictors[side].predict(feed)
@@ -426,60 +427,44 @@ class Samples():
         logger.debug("Returning predictions: %s", swaps.shape)
         return [reconstructions, swaps]
 
-    def create_image_grid(self, side, samples, predictions):
+    def _create_image_grid(self, side, samples, predictions):
         """ Patch the images into the full frame / image grid """
         logger.debug("side: '%s', number of sample arrays: %s, prediction.shapes: %s)",
                      side, len(samples), [pred.shape for pred in predictions])
 
         frames, originals = samples[:2]
+        if self.use_mask:
+            masks = np.repeat((np.rint(samples[2]) == 0.), 3, axis=3)
+        else:
+            masks = np.zeros_like(originals, dtype=bool)
         target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
-        masks = np.repeat(samples[2], 3, axis=3) if self.use_mask else np.ones_like(originals)
-        images = self.tint_masked_areas(originals, predictions, masks)
-        images = self.resize_samples(side, images, target_scale)
+        images = self._tint_masked_areas(originals, predictions, masks)
+        images = self._resize_samples(side, images, target_scale)
         if self.coverage_ratio != 1.:
-            frames = self.frame_overlay(frames)
-            images = self.overlay_foreground(frames, images)
+            images = self._overlay_foreground(frames, images)
         images = np.concatenate(np.split(images, 3, axis=0), axis=2)
         images = np.concatenate(list(images), axis=0)
         images = np.concatenate(np.split(images, 2), axis=1)
         return images
 
-    def frame_overlay(self, frames):
-        """ Add roi frame to a backfround image """
-        logger.debug("full_size: %s", frames.shape[1])
-        color = (0., 0., 1.)
-        line_width = 3
-        full_size = frames.shape[1]
-        padding = int(full_size * (1. - self.coverage_ratio)) // 2
-        length = int(full_size * self.coverage_ratio) // 4
-        t_l = padding - line_width
-        b_r = full_size - padding + line_width
-
-        top_left = slice(t_l, t_l + length), slice(t_l, t_l + length)
-        bot_left = slice(b_r - length, b_r), slice(t_l, t_l + length)
-        top_right = slice(b_r - length, b_r), slice(b_r - length, b_r)
-        bot_right = slice(t_l, t_l + length), slice(b_r - length, b_r)
-
-        for roi in [top_left, bot_left, top_right, bot_right]:
-            frames[:, roi[0], roi[1]] = color
-        logger.debug("Overlayed background. Shape: %s", frames.shape)
-        return frames
-
     @staticmethod
-    def tint_masked_areas(originals, images, masks):
+    def _tint_masked_areas(originals, images, replace_area):
         """ Add the mask to the faces for masked preview """
-        replace_area = (np.rint(masks) == 0.)
-        originals[..., 2][replace_area[..., 0]] += 0.3
-        images[0][replace_area] = originals[replace_area]
-        images[1][replace_area] = originals[replace_area]
+        originals[..., 2][replace_area[..., 0]] += 0.25
+        red_originals = originals[replace_area]
+        images[0][replace_area] = red_originals
+        images[1][replace_area] = red_originals
         images = np.concatenate([originals, images[0], images[1]], axis=0)
         logger.debug("masked shapes: %s", originals.shape[1:])
         return images
 
-    @staticmethod
-    def overlay_foreground(backgrounds, foregrounds):
+    def _overlay_foreground(self, backgrounds, foregrounds):
         """ Overlay the masked faces into the center of the background """
-        backgrounds[..., -1] += 0.3
+        logger.debug("Overlayed background. Shape: %s", backgrounds.shape)
+        color = (0., 0., 1.)
+        for red_square in self.slices:
+            backgrounds[:, red_square[0], red_square[1]] = color
+        backgrounds[..., -1] += 0.25
         offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
         slice_y = slice(offset, offset + foregrounds.shape[1])
         slice_x = slice(offset, offset + foregrounds.shape[2])
@@ -489,16 +474,18 @@ class Samples():
         logger.debug("Foreground inserted. Shape: %s", backgrounds.shape)
         return backgrounds
 
-    def _get_headers(self, width):
+    @staticmethod
+    def _get_headers(width, scaling):
         """ Set headers for images """
-        logger.debug("width: %s", width)
+        width = int(width * scaling)
+        height = int(64. * scaling)
+        logger.debug("height: %s, width: %s", height, width)
 
         def text_size(text, font):
             """ Helper function for list comprehension """
-            [text_width, text_height] = cv2.getTextSize(text, font, 0.8 * self.scaling, 1)[0]
+            [text_width, text_height] = cv2.getTextSize(text, font, 0.8 * scaling, 1)[0]
             return [text_width, text_height]
 
-        height = int(64. * self.scaling)
         offsets = [0, width, width * 2]
         header_a = np.ones((height, width * 3, 3), dtype='float32')
         header_b = np.ones((height, width * 3, 3), dtype='float32')
@@ -514,17 +501,32 @@ class Samples():
                             text,
                             (text_x, text_y),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8 * self.scaling,
+                            0.8 * scaling,
                             (0., 0., 0.),
                             1,
                             lineType=cv2.LINE_AA)
         full_header = np.concatenate([header_a, header_a, header_b, header_b], axis=1)
-
+        full_header = (full_header * 255.).astype('uint8')
         logger.debug("texts: %s, text sizes: %s, text_x: %s, text_y: %s",
                      texts, text_sizes, x_texts, y_texts)
         logger.debug("header shape: %s", full_header.shape)
         return full_header
 
+    @staticmethod
+    def _red_outline_prep(frame_size, coverage_ratio):
+        """ Prepare slices for the red outline around coverage ratio area """
+        logger.debug("frame_size: %s", frame_size)
+        line_width = 3
+        padding = int(frame_size * (1. - coverage_ratio)) // 2
+        length = int(frame_size * coverage_ratio) // 4
+        t_l = padding - line_width
+        b_r = frame_size - padding + line_width
+
+        top_left = slice(t_l, t_l + length), slice(t_l, t_l + length)
+        bot_left = slice(b_r - length, b_r), slice(t_l, t_l + length)
+        top_right = slice(b_r - length, b_r), slice(b_r - length, b_r)
+        bot_right = slice(t_l, t_l + length), slice(b_r - length, b_r)
+        return [top_left, bot_left, top_right, bot_right]
 
 class Timelapse():
     """ Create the timelapse """
