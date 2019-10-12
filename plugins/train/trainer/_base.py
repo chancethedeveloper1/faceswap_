@@ -74,11 +74,13 @@ class TrainerBase():
         self.samples = Samples(self.model,
                                self.use_mask,
                                self.frame_size,
+                               batch_size,
                                self.model.training_opts["coverage_ratio"],
                                self.model.training_opts["preview_scaling"])
         self.timelapse = Timelapse(self.model,
                                    self.use_mask,
                                    self.frame_size,
+                                   batch_size,
                                    self.model.training_opts["coverage_ratio"],
                                    self.config.get("preview_images", 14),
                                    self.batchers)
@@ -183,7 +185,7 @@ class TrainerBase():
                 if not do_preview and not do_timelapse:
                     continue
                 if do_preview:
-                    self.samples.images[side] = batcher.compile_sample(None)
+                    self.samples.images[side] = batcher.samples
                 if do_timelapse:
                     self.timelapse.get_sample(side, timelapse_kwargs)
 
@@ -309,23 +311,23 @@ class Batcher():
         """ Generate the preview if a preview iteration """
         if not do_preview:
             self.samples = None
-            self.target = None
             return
         logger.debug("Generating preview")
         if self.preview_feed is None:
             self.set_preview_feed()
         batch = next(self.preview_feed)
-        self.samples = batch["samples"]
-        self.target = [batch["targets"][self.model.largest_face_index]]
+        self.samples = [batch["samples"]]
+        self.samples += [batch["targets"][self.model.largest_face_index]]
         if self.use_mask:
-            self.target += [batch["masks"]]
+            self.samples += [batch["masks"]]
 
     def set_preview_feed(self):
         """ Set the preview dictionary """
         logger.debug("Setting preview feed: (side: '%s')", self.side)
-        preview_images = self.config.get("preview_images", 14)
-        preview_images = min(max(preview_images, 2), 16)
-        batchsize = min(len(self.images), preview_images)
+        # preview_images = self.config.get("preview_images", 14)
+        # preview_images = min(max(preview_images, 2), 16)
+        # batchsize = min(len(self.images), preview_images)
+        batchsize = min(len(self.images), 14)
         self.preview_feed = self.load_generator().minibatch_ab(self.images,
                                                                batchsize,
                                                                self.side,
@@ -333,35 +335,26 @@ class Batcher():
                                                                is_preview=True)
         logger.debug("Set preview feed. Batchsize: %s", batchsize)
 
-    def compile_sample(self, batch_size, samples=None, images=None):
-        """ Training samples to display in the viewer """
-        num_images = self.config.get("preview_images", 14)
-        num_images = min(batch_size, num_images) if batch_size is not None else num_images
-        logger.debug("Compiling samples: (side: '%s', samples: %s)", self.side, num_images)
-        images = images if images is not None else self.target
-        retval = [samples[0:num_images]] if samples is not None else [self.samples[0:num_images]]
-        if self.use_mask:
-            retval.extend(tgt[0:num_images] for tgt in images)
-        else:
-            retval.extend(images[0:num_images])
-        return retval
-
     def compile_timelapse_sample(self):
         """ Timelapse samples """
         batch = next(self.timelapse_feed)
-        batchsize = len(batch["samples"])
-        images = [batch["targets"][self.model.largest_face_index]]
+        samples = [batch["samples"]]
+        samples += [batch["targets"][self.model.largest_face_index]]
         if self.use_mask:
-            images = images + [batch["masks"]]
-        sample = self.compile_sample(batchsize, samples=batch["samples"], images=images)
-        return sample
+            samples += [batch["masks"]]
+        return samples
 
-    def set_timelapse_feed(self, images, batchsize):
+    def set_timelapse_feed(self, images):
         """ Set the timelapse dictionary """
+        batchsize = min(len(images), 14)
         logger.debug("Setting timelapse feed: (side: '%s', input_images: '%s', batchsize: %s)",
                      self.side, images, batchsize)
+        #preview_images = self.config.get("preview_images", 14)
+        #preview_images = min(max(preview_images, 2), 16)
+        #batchsize = min(len(images), preview_images)
         self.timelapse_feed = self.load_generator().minibatch_ab(images[:batchsize],
-                                                                 batchsize, self.side,
+                                                                 batchsize,
+                                                                 self.side,
                                                                  do_shuffle=False,
                                                                  is_timelapse=True)
         logger.debug("Set timelapse feed")
@@ -369,11 +362,12 @@ class Batcher():
 
 class Samples():
     """ Display samples for preview and timelapse """
-    def __init__(self, model, use_mask, frame_size, coverage_ratio, scaling):
+    def __init__(self, model, use_mask, frame_size, batch_size, coverage_ratio, scaling):
         logger.debug("Initializing %s: model: '%s', use_mask: %s, coverage_ratio: %s)",
                      self.__class__.__name__, model, use_mask, coverage_ratio)
         self.model = model
         self.use_mask = use_mask
+        self.batch_size = batch_size
         self.images = dict()
         self.coverage_ratio = coverage_ratio
         self.scaling = scaling
@@ -390,10 +384,8 @@ class Samples():
             for side, samples in self.images.items():
                 other_side = "a" if side == "b" else "b"
                 feed = samples[1:]
-                target_scale = self.model.input_shape[0] / feed[0].shape[1]
-                feed[0] = self._resize_samples(side, feed[0], target_scale)
-                preds = self._get_predictions(side, other_side, feed)
-                image_grid[side] = self._create_image_grid(side, samples, preds)
+                reconstructions, swaps = self._get_predictions(side, other_side, feed)
+                image_grid[side] = self._create_image_grid(side, samples, reconstructions, swaps)
             full_grid = np.concatenate([image_grid["a"], image_grid["b"]], axis=1) * 255.
             full_display = np.squeeze(self._resize_samples("both", full_grid[None, ...], self.scaling))
             full_display = np.clip(full_display, 0., 255.).astype('uint8', copy=False)
@@ -419,59 +411,62 @@ class Samples():
     def _get_predictions(self, side, other_side, feed):
         """ Return the sample predictions from the model """
         logger.debug("Getting Predictions for side %s", side)
-        reconstructions = self.model.predictors[side].predict(feed)
+        target_scale = self.model.input_shape[0] / feed[0].shape[1]
+        feed[0] = self._resize_samples(side, feed[0], target_scale)
+        reconstructions = self.model.predictors[side].predict(feed, batch_size=self.batch_size)
         swaps = self.model.predictors[other_side].predict(feed)
         if not isinstance(reconstructions, np.ndarray):
             reconstructions = reconstructions[self.model.largest_face_index]
             swaps = swaps[self.model.largest_face_index]
         logger.debug("Returning predictions: %s", swaps.shape)
-        return [reconstructions, swaps]
+        return reconstructions, swaps
 
-    def _create_image_grid(self, side, samples, predictions):
+    def _create_image_grid(self, side, samples, reconstructions, swaps):
         """ Patch the images into the full frame / image grid """
-        logger.debug("side: '%s', number of sample arrays: %s, prediction.shapes: %s)",
-                     side, len(samples), [pred.shape for pred in predictions])
+        logger.debug("side: '%s', prediction.shapes: %s)", side, reconstructions.shape)
 
-        frames, originals = samples[:2]
+        frames, targets = samples[:2]
+        target_scale = frames.shape[1] / targets.shape[1] * self.coverage_ratio
         if self.use_mask:
-            masks = np.repeat((np.rint(samples[2]) == 0.), 3, axis=3)
+            inverted_masks = np.repeat((np.rint(samples[2]) == 0.), 3, axis=3)
         else:
-            masks = np.zeros_like(originals, dtype=bool)
-        target_scale = frames.shape[1] / originals.shape[1] * self.coverage_ratio
-        images = self._tint_masked_areas(originals, predictions, masks)
+            inverted_masks = np.zeros_like(targets, dtype=bool)
+        images = self._tint_masked_areas(targets, reconstructions, swaps, inverted_masks)
         images = self._resize_samples(side, images, target_scale)
-        if self.coverage_ratio != 1.:
-            images = self._overlay_foreground(frames, images)
+        images = self._overlay_foreground(frames, images)
         images = np.concatenate(np.split(images, 3, axis=0), axis=2)
         images = np.concatenate(list(images), axis=0)
         images = np.concatenate(np.split(images, 2), axis=1)
         return images
 
     @staticmethod
-    def _tint_masked_areas(originals, images, replace_area):
+    def _tint_masked_areas(targets, reconstructions, swaps, inverted_masks):
         """ Add the mask to the faces for masked preview """
-        originals[..., 2][replace_area[..., 0]] += 0.25
-        red_originals = originals[replace_area]
-        images[0][replace_area] = red_originals
-        images[1][replace_area] = red_originals
-        images = np.concatenate([originals, images[0], images[1]], axis=0)
-        logger.debug("masked shapes: %s", originals.shape[1:])
+        targets[..., 2][inverted_masks[..., 0]] += 0.25
+        red_targets = targets[inverted_masks]
+        reconstructions[inverted_masks] = red_targets
+        swaps[inverted_masks] = red_targets
+        images = np.concatenate([targets, reconstructions, swaps], axis=0)
+        logger.debug("masked shapes: %s", targets.shape[1:])
         return images
 
     def _overlay_foreground(self, backgrounds, foregrounds):
         """ Overlay the masked faces into the center of the background """
         logger.debug("Overlayed background. Shape: %s", backgrounds.shape)
-        color = (0., 0., 1.)
-        for red_square in self.slices:
-            backgrounds[:, red_square[0], red_square[1]] = color
-        backgrounds[..., -1] += 0.25
-        offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
-        slice_y = slice(offset, offset + foregrounds.shape[1])
-        slice_x = slice(offset, offset + foregrounds.shape[2])
-        backgrounds = np.concatenate((backgrounds, backgrounds, backgrounds), axis=0)
-        for background, foreground in zip(backgrounds, foregrounds):
-            background[slice_y, slice_x] = foreground
-        logger.debug("Foreground inserted. Shape: %s", backgrounds.shape)
+        if self.coverage_ratio == 1.:
+            return foregrounds
+        else:
+            color = (0., 0., 1.)
+            for red_square in self.slices:
+                backgrounds[:, red_square[0], red_square[1]] = color
+            backgrounds[..., -1] += 0.25
+            offset = (backgrounds.shape[1] - foregrounds.shape[1]) // 2
+            slice_y = slice(offset, offset + foregrounds.shape[1])
+            slice_x = slice(offset, offset + foregrounds.shape[2])
+            backgrounds = np.concatenate((backgrounds, backgrounds, backgrounds), axis=0)
+            for background, foreground in zip(backgrounds, foregrounds):
+                background[slice_y, slice_x] = foreground
+            logger.debug("Foreground inserted. Shape: %s", backgrounds.shape)
         return backgrounds
 
     @staticmethod
@@ -489,10 +484,11 @@ class Samples():
         offsets = [0, width, width * 2]
         header_a = np.ones((height, width * 3, 3), dtype='float32')
         header_b = np.ones((height, width * 3, 3), dtype='float32')
-        for sides, header in zip([['A', 'B'], ['B', 'A']], [header_a, header_b]):
-            texts = ["Target {0}".format(sides[0]),
-                     "{0} > {0}".format(sides[0]),
-                     "{0} > {1}".format(sides[0], sides[1])]
+        gen = zip([("Original", "Swap", "A"), ("Swap", "Original", "B")], [header_a, header_b])
+        for side, header in gen:
+            texts = ["{0} ({1})".format(side[0], side[2]),
+                     "{0} > {0}".format(side[0]),
+                     "{0} > {1}".format(side[0], side[1])]
             text_sizes = [text_size(text, cv2.FONT_HERSHEY_SIMPLEX) for text in texts]
             y_texts = [int((height + text[1]) / 2) for text in text_sizes]
             x_texts = [int((width - text[0]) / 2 + off) for off, text in zip(offsets, text_sizes)]
@@ -530,13 +526,12 @@ class Samples():
 
 class Timelapse():
     """ Create the timelapse """
-    def __init__(self, model, use_mask, frame_size, coverage_ratio, preview_images, batchers):
+    def __init__(self, model, use_mask, frame_size, batch_size, coverage_ratio, preview_images, batchers):
         logger.debug("Initializing %s: model: %s, use_mask: %s, frame_size: %s, "
-                     "coverage_ratio: %s, preview_images: %s, batchers: '%s')",
+                     "coverage_ratio: %s, batchers: '%s')",
                      self.__class__.__name__, model, use_mask, frame_size, coverage_ratio,
-                     preview_images, batchers)
-        self.preview_images = preview_images
-        self.samples = Samples(model, use_mask, frame_size, coverage_ratio, 1.0)
+                     batchers)
+        self.samples = Samples(model, use_mask, frame_size, batch_size, coverage_ratio, 1.0)
         self.model = model
         self.batchers = batchers
         self.output_file = None
@@ -560,11 +555,8 @@ class Timelapse():
         logger.debug("Timelapse output set to '%s'", self.output_file)
 
         images = {"a": get_image_paths(input_a), "b": get_image_paths(input_b)}
-        batchsize = min(len(images["a"]),
-                        len(images["b"]),
-                        self.preview_images)
         for side, image_files in images.items():
-            self.batchers[side].set_timelapse_feed(image_files, batchsize)
+            self.batchers[side].set_timelapse_feed(image_files)
         logger.debug("Set up timelapse")
 
     def output_timelapse(self):
