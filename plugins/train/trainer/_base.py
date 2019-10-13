@@ -29,8 +29,8 @@ import numpy as np
 
 from lib.alignments import Alignments
 from lib.faces_detect import DetectedFace
-from lib.training_data import TrainingDataGenerator
 from lib.utils import FaceswapError, get_folder, get_image_paths
+from plugins.plugin_loader import PluginLoader
 from plugins.train._config import Config
 from tensorflow.python import errors_impl as tf_errors  # pylint:disable=no-name-in-module
 import tensorflow as tf
@@ -262,10 +262,11 @@ class Batcher():
         input_size = self.model.input_shape[0]
         output_shapes = self.model.output_shapes
         logger.debug("input_size: %s, output_shapes: %s", input_size, output_shapes)
-        generator = TrainingDataGenerator(input_size,
-                                          output_shapes,
-                                          self.model.training_opts,
-                                          self.config)
+        loader = PluginLoader.get_loader("filelist")
+        generator = loader(input_size,
+                           output_shapes,
+                           self.model.training_opts,
+                           self.config)
         return generator
 
     def train_one_batch(self):

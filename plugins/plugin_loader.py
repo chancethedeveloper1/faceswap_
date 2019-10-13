@@ -36,6 +36,11 @@ class PluginLoader():
         return PluginLoader._import("train.trainer", name, disable_logging)
 
     @staticmethod
+    def get_loader(name, disable_logging=False):
+        """ Return requested loader plugin """
+        return PluginLoader._import("train.loader", name, disable_logging)
+
+    @staticmethod
     def get_converter(category, name, disable_logging=False):
         """ Return the converter sub plugin """
         return PluginLoader._import("convert.{}".format(category), name, disable_logging)
