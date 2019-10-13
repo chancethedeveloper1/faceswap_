@@ -58,10 +58,11 @@ class TrainerBase():
 
         self.process_training_opts()
         self.pingpong = PingPong(model, self.sides)
-
+        self.loader = PluginLoader.get_loader("filelist") # Expose for selection, hard-code for now
         self.batchers = {side: Batcher(side,
                                        images[side],
                                        self.model,
+                                       self.loader,
                                        self.use_mask,
                                        batch_size,
                                        self.config)
@@ -237,7 +238,7 @@ class TrainerBase():
 
 class Batcher():
     """ Batch images from a single side """
-    def __init__(self, side, images, model, use_mask, batch_size, config):
+    def __init__(self, side, images, model, loader, use_mask, batch_size, config):
         logger.debug("Initializing %s: side: '%s', num_images: %s, batch_size: %s, config: %s)",
                      self.__class__.__name__, side, len(images), batch_size, config)
         self.model = model
@@ -248,21 +249,20 @@ class Batcher():
         self.target = None
         self.samples = None
         self.masks = None
-
-        generator = self.load_generator()
+        self.loader = loader
+        generator = self.load_generator(self.loader)
         self.feed = generator.minibatch_ab(images, batch_size, self.side)
 
         self.preview_feed = None
         self.timelapse_feed = None
         self.set_preview_feed()
 
-    def load_generator(self):
+    def load_generator(self, loader):
         """ Pass arguments to TrainingDataGenerator and return object """
         logger.debug("Loading generator: %s", self.side)
         input_size = self.model.input_shape[0]
         output_shapes = self.model.output_shapes
         logger.debug("input_size: %s, output_shapes: %s", input_size, output_shapes)
-        loader = PluginLoader.get_loader("filelist")
         generator = loader(input_size,
                            output_shapes,
                            self.model.training_opts,
@@ -319,11 +319,11 @@ class Batcher():
         preview_images = self.config.get("preview_images", 14)
         preview_images = min(max(preview_images, 2), 16)
         batchsize = min(len(self.images), preview_images)
-        self.preview_feed = self.load_generator().minibatch_ab(self.images,
-                                                               batchsize,
-                                                               self.side,
-                                                               do_shuffle=True,
-                                                               is_preview=True)
+        self.preview_feed = self.load_generator(self.loader).minibatch_ab(self.images,
+                                                                          batchsize,
+                                                                          self.side,
+                                                                          do_shuffle=True,
+                                                                          is_preview=True)
         logger.debug("Set preview feed. Batchsize: %s", batchsize)
 
     def compile_sample(self, batch_size, samples=None, images=None, masks=None):
@@ -353,10 +353,11 @@ class Batcher():
         """ Set the timelapse dictionary """
         logger.debug("Setting timelapse feed: (side: '%s', input_images: '%s', batchsize: %s)",
                      self.side, images, batchsize)
-        self.timelapse_feed = self.load_generator().minibatch_ab(images[:batchsize],
-                                                                 batchsize, self.side,
-                                                                 do_shuffle=False,
-                                                                 is_timelapse=True)
+        self.timelapse_feed = self.load_generator(self.loader).minibatch_ab(images[:batchsize],
+                                                                            batchsize,
+                                                                            self.side,
+                                                                            do_shuffle=False,
+                                                                            is_timelapse=True)
         logger.debug("Set timelapse feed")
 
 
