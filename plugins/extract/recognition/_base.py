@@ -9,13 +9,13 @@ The plugin will receive a dict containing:
 
 >>> {"filename": <filename of source frame>,
 >>>  "image": <source image>,
->>>  "detected_faces": <list of bounding box dicts from lib/plugins/extract/detect/_base>}
+>>>  "detected_faces": <list of DetectedFace classes from lib/faces_detect>}
 
 For each source item, the plugin must pass a dict to finalize containing:
 
 >>> {"filename": <filename of source frame>,
 >>>  "image": <four channel source image>,
->>>  "detected_faces": <list of bounding box dicts from lib/plugins/extract/detect/_base>}
+>>>  "detected_faces": <list of DetectedFace classes from lib/faces_detect>}
 """
 
 import cv2

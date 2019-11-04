@@ -510,32 +510,6 @@ class ExtractConvertArgs(FaceSwapArgs):
             "group": "Data",
             "help": "Optional path to an alignments file. Leave blank if the alignments file is "
                     "at the default location."})
-        argument_list.append({
-            "opts": ("-n", "--nfilter"),
-            "action": FilesFullPaths,
-            "filetypes": "image",
-            "dest": "nfilter",
-            "nargs": "+",
-            "default": None,
-            "group": "Data",
-            "help": "Identities to avoid: Optionally filter out people who you do not wish to "
-                    "process by passing in an image of that person. Should be a front portrait "
-                    "with a single person in the image. Multiple images can be added space "
-                    "separated. NB: Using face filter will significantly decrease extraction "
-                    "speed and its accuracy cannot be guaranteed."})
-        argument_list.append({
-            "opts": ("-f", "--filter"),
-            "action": FilesFullPaths,
-            "filetypes": "image",
-            "dest": "filter",
-            "nargs": "+",
-            "default": None,
-            "group": "Data",
-            "help": "Identities to extract: Optionally select people you wish to process by "
-                    "passing in an image of that person. Should be a front portrait with a "
-                    "single person in the image. Multiple images can be added space separated. "
-                    "NB: Using face filter will significantly decrease extraction speed and its "
-                    "accuracy cannot be guaranteed."})
         return argument_list
 
 
@@ -629,6 +603,32 @@ class ExtractArgs(ExtractConvertArgs):
                     "\nL|VGG Face2: insert description"
                     "\nL|FaceNet: insert description"})
         argument_list.append({
+            "opts": ("-n", "--nfilter"),
+            "action": FilesFullPaths,
+            "filetypes": "image",
+            "dest": "nfilter",
+            "nargs": "+",
+            "default": None,
+            "group": "Plugins",
+            "help": "Identities to avoid: Optionally filter out people who you do not wish to "
+                    "process by passing in an image of that person. Should be a front portrait "
+                    "with a single person in the image. Multiple images can be added space "
+                    "separated. NB: Using face filter will significantly decrease extraction "
+                    "speed and its accuracy cannot be guaranteed."})
+        argument_list.append({
+            "opts": ("-f", "--filter"),
+            "action": FilesFullPaths,
+            "filetypes": "image",
+            "dest": "filter",
+            "nargs": "+",
+            "default": None,
+            "group": "Plugins",
+            "help": "Identities to extract: Optionally select people you wish to process by "
+                    "passing in an image of that person. Should be a front portrait with a "
+                    "single person in the image. Multiple images can be added space separated. "
+                    "NB: Using face filter will significantly decrease extraction speed and its "
+                    "accuracy cannot be guaranteed."})
+        argument_list.append({
             "opts": ("-nm", "--normalization"),
             "action": Radio,
             "type": str.lower,
@@ -650,7 +650,7 @@ class ExtractArgs(ExtractConvertArgs):
             "type": str,
             "dest": "rotate_images",
             "default": None,
-            "group": "plugins",
+            "group": "Face Processing",
             "help": "If a face isn't found, rotate the images to try to find a face. Can find "
                     "more faces at the cost of extraction speed. Pass in a single number to use "
                     "increments of that size up to 360, or pass in a list of numbers to enumerate "
@@ -904,6 +904,32 @@ class ConvertArgs(ExtractConvertArgs):
                     "your alignments file and also exist within the specified folder will be "
                     "converted. Leaving this blank will convert all faces that exist within the "
                     "alignments file."})
+        argument_list.append({
+            "opts": ("-n", "--nfilter"),
+            "action": FilesFullPaths,
+            "filetypes": "image",
+            "dest": "nfilter",
+            "nargs": "+",
+            "default": None,
+            "group": "Face Processing",
+            "help": "Identities to avoid: Optionally filter out people who you do not wish to "
+                    "process by passing in an image of that person. Should be a front portrait "
+                    "with a single person in the image. Multiple images can be added space "
+                    "separated. NB: Using face filter will significantly decrease extraction "
+                    "speed and its accuracy cannot be guaranteed."})
+        argument_list.append({
+            "opts": ("-f", "--filter"),
+            "action": FilesFullPaths,
+            "filetypes": "image",
+            "dest": "filter",
+            "nargs": "+",
+            "default": None,
+            "group": "Face Processing",
+            "help": "Identities to extract: Optionally select people you wish to process by "
+                    "passing in an image of that person. Should be a front portrait with a "
+                    "single person in the image. Multiple images can be added space separated. "
+                    "NB: Using face filter will significantly decrease extraction speed and its "
+                    "accuracy cannot be guaranteed."})
         argument_list.append({
             "opts": ("-l", "--ref_threshold"),
             "action": Slider,
