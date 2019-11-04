@@ -591,6 +591,18 @@ class ExtractArgs(ExtractConvertArgs):
                     "testing for further description. Profile faces may result in sub-par "
                     "performance."})
         argument_list.append({
+            "opts": ("-R", "--recognizer"),
+            "action": Radio,
+            "type": str.lower,
+            "choices": PluginLoader.get_available_extractors("recognition", add_none=True),
+            "default": "none",
+            "group": "Plugins",
+            "help": "R|Face Recognition Model to use."
+                    "\nL|none: Process all detected faces."
+                    "\nL|VGG Face: insert description"
+                    "\nL|VGG Face2: insert description"
+                    "\nL|FaceNet: insert description"})
+        argument_list.append({
             "opts": ("-nm", "--normalization"),
             "action": Radio,
             "type": str.lower,

@@ -78,6 +78,25 @@ class PluginLoader():
         return PluginLoader._import("extract.mask", name, disable_logging)
 
     @staticmethod
+    def get_recognizer(name, disable_logging=False):
+        """ Return requested recognizer plugin
+
+        Parameters
+        ----------
+        name: str
+            The name of the requested recognizer plugin
+        disable_logging: bool, optional
+            Whether to disable the INFO log message that the plugin is being imported.
+            Default: `False`
+
+        Returns
+        -------
+        :class:`plugins.extract.recognition` object:
+            An extraction recognition plugin
+        """
+        return PluginLoader._import("extract.recognition", name, disable_logging)
+
+    @staticmethod
     def get_model(name, disable_logging=False):
         """ Return requested training model plugin
 
@@ -169,7 +188,7 @@ class PluginLoader():
 
         Parameters
         ----------
-        extractor_type: {'aligner', 'detector', 'masker'}
+        extractor_type: {'aligner', 'detector', 'masker', 'recognizer'}
             The type of extractor to return the plugins for
         add_none: bool, optional
             Append "none" to the list of returned plugins. Default: False
