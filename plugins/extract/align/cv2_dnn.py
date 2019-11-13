@@ -41,6 +41,7 @@ class Align(Aligner):
         self.input_size = 128
         self.colorformat = "RGB"
         self.vram = 0  # Doesn't use GPU
+        self.vram_per_batch = 0
         self.batchsize = 1
 
     def init_model(self):
@@ -52,12 +53,13 @@ class Align(Aligner):
         """ Compile the detected faces for prediction """
         faces, batch["roi"] = self.align_image(batch["detected_faces"])
         faces = self._normalize_faces(faces)
-        batch["feed"] = np.array(faces, dtype="float32").transpose((0, 3, 1, 2))
+        batch["feed"] = np.array(faces, dtype="float32")[..., :3].transpose((0, 3, 1, 2))
         return batch
 
     def align_image(self, detected_faces):
         """ Align the incoming image for prediction """
         logger.trace("Aligning image around center")
+        sizes = (self.input_size, self.input_size)
         rois = []
         faces = []
         for face in detected_faces:
@@ -75,14 +77,8 @@ class Align(Aligner):
             image = self.pad_image(roi, face.image)
             face = image[roi[1]: roi[3], roi[0]: roi[2]]
 
-            if face.shape[0] < self.input_size:
-                interpolation = cv2.INTER_CUBIC  # pylint:disable=no-member
-            else:
-                interpolation = cv2.INTER_AREA  # pylint:disable=no-member
-
-            face = cv2.resize(face,  # pylint:disable=no-member
-                              dsize=(int(self.input_size), int(self.input_size)),
-                              interpolation=interpolation)
+            interpolation = cv2.INTER_CUBIC if face.shape[0] < self.input_size else cv2.INTER_AREA
+            face = cv2.resize(face, dsize=sizes, interpolation=interpolation)
             faces.append(face)
             rois.append(roi)
         return faces, rois
@@ -126,11 +122,13 @@ class Align(Aligner):
 
         # Shift the box if any points fall below zero
         if left < 0:
-            right += abs(left)
-            left += abs(left)
+            shift_right = abs(left)
+            right += shift_right
+            left += shift_right
         if top < 0:
-            bottom += abs(top)
-            top += abs(top)
+            shift_down = abs(top)
+            bottom += shift_down
+            top += shift_down
 
         # Make sure box is always square.
         assert ((right - left) == (bottom - top)), 'Box is not square.'
@@ -139,19 +137,19 @@ class Align(Aligner):
 
     @staticmethod
     def pad_image(box, image):
-        """Pad image if facebox falls outside of boundaries """
+        """Pad image if face-box falls outside of boundaries """
         width, height = image.shape[:2]
         pad_l = 1 - box[0] if box[0] < 0 else 0
         pad_t = 1 - box[1] if box[1] < 0 else 0
         pad_r = box[2] - width if box[2] > width else 0
         pad_b = box[3] - height if box[3] > height else 0
         logger.trace("Padding: (l: %s, t: %s, r: %s, b: %s)", pad_l, pad_t, pad_r, pad_b)
-        retval = cv2.copyMakeBorder(image.copy(),  # pylint: disable=no-member
+        retval = cv2.copyMakeBorder(image.copy(),
                                     pad_t,
                                     pad_b,
                                     pad_l,
                                     pad_r,
-                                    cv2.BORDER_CONSTANT,  # pylint: disable=no-member
+                                    cv2.BORDER_CONSTANT,
                                     value=(0, 0, 0))
         logger.trace("Padded shape: %s", retval.shape)
         return retval
@@ -172,11 +170,9 @@ class Align(Aligner):
     def get_pts_from_predict(batch):
         """ Get points from predictor """
         for prediction, roi in zip(batch["prediction"], batch["roi"]):
-            points = np.array(prediction).flatten()
-            points = np.reshape(points, (-1, 2))
+            points = np.reshape(prediction, (-1, 2))
             points *= (roi[2] - roi[0])
             points[:, 0] += roi[0]
             points[:, 1] += roi[1]
-            landmarks = np.rint(points).astype("uint").tolist()
-            batch.setdefault("landmarks", []).append(landmarks)
+            batch.setdefault("landmarks", []).append(points)
         logger.trace("Predicted Landmarks: %s", batch["landmarks"])

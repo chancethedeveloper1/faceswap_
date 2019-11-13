@@ -4,7 +4,6 @@ import collections
 import logging
 from logging.handlers import RotatingFileHandler
 import os
-import re
 import sys
 import traceback
 
@@ -39,19 +38,31 @@ class FaceswapLogger(logging.Logger):
 
 
 class FaceswapFormatter(logging.Formatter):
-    """ Override formatter to strip newlines and multiple spaces from logger
-        Messages that begin with "R|" should be handled as is
-    """
+    """ Override formatter to strip newlines the final message """
+
     def format(self, record):
-        if isinstance(record.msg, str):
-            if record.msg.startswith("R|"):
-                record.msg = record.msg[2:]
-                record.strip_spaces = False
-            elif record.strip_spaces:
-                record.msg = re.sub(" +",
-                                    " ",
-                                    record.msg.replace("\n", "\\n").replace("\r", "\\r"))
-        return super().format(record)
+        record.message = record.getMessage()
+        # strip newlines
+        if "\n" in record.message or "\r" in record.message:
+            record.message = record.message.replace("\n", "\\n").replace("\r", "\\r")
+
+        if self.usesTime():
+            record.asctime = self.formatTime(record, self.datefmt)
+        msg = self.formatMessage(record)
+        if record.exc_info:
+            # Cache the traceback text to avoid converting it multiple times
+            # (it's constant anyway)
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            if msg[-1:] != "\n":
+                msg = msg + "\n"
+            msg = msg + record.exc_text
+        if record.stack_info:
+            if msg[-1:] != "\n":
+                msg = msg + "\n"
+            msg = msg + self.formatStack(record.stack_info)
+        return msg
 
 
 class RollingBuffer(collections.deque):
@@ -150,7 +161,7 @@ def get_loglevel(loglevel):
 def crash_log():
     """ Write debug_buffer to a crash log on crash """
     from lib.sysinfo import sysinfo
-    path = os.getcwd()
+    path = os.path.dirname(os.path.realpath(sys.argv[0]))
     filename = os.path.join(path, datetime.now().strftime("crash_report.%Y.%m.%d.%H%M%S%f.log"))
 
     freeze_log = list(debug_buffer)

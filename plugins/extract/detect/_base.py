@@ -19,7 +19,6 @@ import cv2
 import numpy as np
 
 from lib.faces_detect import DetectedFace
-from lib.utils import rotate_landmarks
 from plugins.extract._base import Extractor, logger
 
 
@@ -54,7 +53,7 @@ class Detector(Extractor):
     plugins.extract.detect : Detector plugins
     plugins.extract._base : Parent class for all extraction plugins
     plugins.extract.align._base : Aligner parent class for extraction plugins.
-
+    plugins.extract.mask._base : Masker parent class for extraction plugins.
     """
 
     def __init__(self, git_model_id=None, model_filename=None,
@@ -86,7 +85,7 @@ class Detector(Extractor):
 
         >>> {'filename': [<filenames of source frames>],
         >>>  'image': [<source images>],
-        >>>  'scaled_image': <np.array of images standardized for prediction>,
+        >>>  'scaled_image': <numpy.ndarray of images standardized for prediction>,
         >>>  'scale': [<scaling factors for each image>],
         >>>  'pad': [<padding for each image>],
         >>>  'detected_faces': [[<lib.faces_detect.DetectedFace objects]]}
@@ -165,7 +164,7 @@ class Detector(Extractor):
                        for faces in batch["prediction"]]
         # Rotations
         if any(m.any() for m in batch["rotmat"]) and any(batch_faces):
-            batch_faces = [[self._rotate_rect(face, rotmat) if rotmat.any() else face
+            batch_faces = [[self._rotate_face(face, rotmat) if rotmat.any() else face
                             for face in faces]
                            for faces, rotmat in zip(batch_faces, batch["rotmat"])]
 
@@ -255,13 +254,13 @@ class Detector(Extractor):
     @staticmethod
     def _scale_image(image, image_size, scale):
         """ Scale the image and optional pad to given size """
-        interpln = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA  # pylint:disable=no-member
+        interpln = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
         if scale != 1.0:
             dims = (int(image_size[1] * scale), int(image_size[0] * scale))
             logger.trace("Resizing detection image from %s to %s. Scale=%s",
                          "x".join(str(i) for i in reversed(image_size)),
                          "x".join(str(i) for i in dims), scale)
-            image = cv2.resize(image, dims, interpolation=interpln)  # pylint:disable=no-member
+            image = cv2.resize(image, dims, interpolation=interpln)
         logger.trace("Resized image shape: %s", image.shape)
         return image
 
@@ -273,13 +272,12 @@ class Detector(Extractor):
             pad_r = (self.input_size - width) - pad_l
             pad_t = (self.input_size - height) // 2
             pad_b = (self.input_size - height) - pad_t
-            image = cv2.copyMakeBorder(  # pylint:disable=no-member
-                image,
-                pad_t,
-                pad_b,
-                pad_l,
-                pad_r,
-                cv2.BORDER_CONSTANT)  # pylint:disable=no-member
+            image = cv2.copyMakeBorder(image,
+                                       pad_t,
+                                       pad_b,
+                                       pad_l,
+                                       pad_r,
+                                       cv2.BORDER_CONSTANT)
         logger.trace("Padded image shape: %s", image.shape)
         return image
 
@@ -290,11 +288,11 @@ class Detector(Extractor):
             or face falls entirely outside of image """
         dims = [img.shape[:2] for img in batch["image"]]
         logger.trace("image dims: %s", dims)
-        batch["detected_faces"] = [[face for face in faces
+        batch["detected_faces"] = [[face
+                                    for face in faces
                                     if face.right > 0 and face.left < dim[1]
                                     and face.bottom > 0 and face.top < dim[0]]
-                                   for dim, faces in zip(dims,
-                                                         batch.get("detected_faces", list()))]
+                                   for dim, faces in zip(dims, batch.get("detected_faces", []))]
 
     def _filter_small_faces(self, detected_faces):
         """ Filter out any faces smaller than the min size threshold """
@@ -365,11 +363,47 @@ class Detector(Extractor):
         batch["rotmat"] = retval["rotmat"]
 
     @staticmethod
-    def _rotate_rect(bounding_box, rotation_matrix):
-        """ Rotate a bounding box dict based on the rotation_matrix"""
-        logger.trace("Rotating bounding box")
-        bounding_box = rotate_landmarks(bounding_box, rotation_matrix)
-        return bounding_box
+    def _rotate_face(face, rotation_matrix):
+        """ Rotates the detection bounding box around the given rotation matrix.
+
+        Parameters
+        ----------
+        face: :class:`DetectedFace`
+            A :class:`DetectedFace` containing the `x`, `w`, `y`, `h` detection bounding box
+            points.
+        rotation_matrix: numpy.ndarray
+            The rotation matrix to rotate the given object by.
+
+        Returns
+        -------
+        :class:`DetectedFace`
+            The same class with the detection bounding box points rotated by the given matrix.
+        """
+        logger.trace("Rotating face: (face: %s, rotation_matrix: %s)", face, rotation_matrix)
+        bounding_box = [[face.left, face.top],
+                        [face.right, face.top],
+                        [face.right, face.bottom],
+                        [face.left, face.bottom]]
+        rotation_matrix = cv2.invertAffineTransform(rotation_matrix)
+
+        points = np.array(bounding_box, "int32")
+        points = np.expand_dims(points, axis=0)
+        transformed = cv2.transform(points, rotation_matrix).astype("int32")
+        rotated = transformed.squeeze()
+
+        # Bounding box should follow x, y planes, so get min/max for non-90 degree rotations
+        pt_x = min([pnt[0] for pnt in rotated])
+        pt_y = min([pnt[1] for pnt in rotated])
+        pt_x1 = max([pnt[0] for pnt in rotated])
+        pt_y1 = max([pnt[1] for pnt in rotated])
+        width = pt_x1 - pt_x
+        height = pt_y1 - pt_y
+
+        face.x = int(pt_x)
+        face.y = int(pt_y)
+        face.w = int(width)
+        face.h = int(height)
+        return face
 
     def _rotate_image_by_angle(self, image, angle):
         """ Rotate an image by a given angle.
@@ -382,14 +416,11 @@ class Detector(Extractor):
 
         height, width = image.shape[:2]
         image_center = (width/2, height/2)
-        rotation_matrix = cv2.getRotationMatrix2D(  # pylint: disable=no-member
-            image_center, -1.*angle, 1.)
+        rotation_matrix = cv2.getRotationMatrix2D(image_center, -1.*angle, 1.)
         rotation_matrix[0, 2] += self.input_size / 2 - image_center[0]
         rotation_matrix[1, 2] += self.input_size / 2 - image_center[1]
         logger.trace("Rotated image: (rotation_matrix: %s", rotation_matrix)
-        image = cv2.warpAffine(image,  # pylint: disable=no-member
-                               rotation_matrix,
-                               (self.input_size, self.input_size))
+        image = cv2.warpAffine(image, rotation_matrix, (self.input_size, self.input_size))
         if channels_first:
             image = np.moveaxis(image, 2, 0)
 

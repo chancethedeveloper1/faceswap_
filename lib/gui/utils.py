@@ -13,9 +13,10 @@ import numpy as np
 
 from PIL import Image, ImageDraw, ImageTk
 
-from lib.Serializer import JSONSerializer
+from lib.serializer import get_serializer
 
 from ._config import Config as UserConfig
+from ._redirector import WidgetRedirector
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 _CONFIG = None
@@ -91,9 +92,7 @@ class FileHandler():
         """ Set the filetypes for opening/saving """
         all_files = ("All files", "*.*")
         filetypes = {"default": (all_files,),
-                     "alignments": [("JSON", "*.json"),
-                                    ("Pickle", "*.p"),
-                                    ("YAML", "*.yaml *.yml"),
+                     "alignments": [("Faceswap Alignments", "*.fsa *.json"),
                                     all_files],
                      "config": [("Faceswap GUI config files", "*.fsw"), all_files],
                      "csv": [("Comma separated values", "*.csv"), all_files],
@@ -112,6 +111,7 @@ class FileHandler():
                                ("MP4", "*.mp4"),
                                ("MPEG", "*.mpeg *.mpg"),
                                ("WebM", "*.webm"),
+                               ("Windows Media Video", "*.wmv"),
                                all_files]}
         # Add in multi-select options
         for key, val in filetypes.items():
@@ -510,6 +510,18 @@ class Images():
         self.previewtrain[name][1] = ImageTk.PhotoImage(displayimg)
 
 
+class ReadOnlyText(tk.Text):  # pylint: disable=too-many-ancestors
+    """ A read only text widget that redirects a standard tk.Text widget's insert and delete
+    attributes.
+    Source: https://stackoverflow.com/questions/3842155
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.redirector = WidgetRedirector(self)
+        self.insert = self.redirector.register("insert", lambda *args, **kw: "break")
+        self.delete = self.redirector.register("delete", lambda *args, **kw: "break")
+
+
 class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
     """ The Console out section of the GUI """
 
@@ -519,7 +531,7 @@ class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
         ttk.Frame.__init__(self, parent)
         self.pack(side=tk.TOP, anchor=tk.W, padx=10, pady=(2, 0),
                   fill=tk.BOTH, expand=True)
-        self.console = tk.Text(self)
+        self.console = ReadOnlyText(self)
         rc_menu = ContextMenu(self.console)
         rc_menu.cm_bind()
         self.console_clear = get_config().tk_vars['consoleclear']
@@ -538,7 +550,7 @@ class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
     def build_console(self):
         """ Build and place the console """
         logger.debug("Build console")
-        self.console.config(width=100, height=6, bg="gray90", fg="black", state="disabled")
+        self.console.config(width=100, height=6, bg="gray90", fg="black")
         self.console.pack(side=tk.LEFT, anchor=tk.N, fill=tk.BOTH, expand=True)
 
         scrollbar = ttk.Scrollbar(self, command=self.console.yview)
@@ -575,9 +587,7 @@ class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
         if not self.console_clear.get():
             logger.debug("Console not set for clearing. Skipping")
             return
-        self.console.configure(state="normal")
         self.console.delete(1.0, tk.END)
-        self.console.configure(state="disabled")
         self.console_clear.set(False)
         logger.debug("Cleared console")
 
@@ -607,10 +617,8 @@ class SysOutRouter():
 
     def write(self, string):
         """ Capture stdout/stderr """
-        self.console.configure(state="normal")
         self.console.insert(tk.END, string, self.get_tag(string))
         self.console.see(tk.END)
-        self.console.configure(state="disabled")
 
     @staticmethod
     def flush():
@@ -633,7 +641,7 @@ class Config():
         self.scaling_factor = scaling_factor
         self.pathcache = pathcache
         self.statusbar = statusbar
-        self.serializer = JSONSerializer
+        self.serializer = get_serializer("json")
         self.tk_vars = self.set_tk_vars()
         self.user_config = UserConfig(None)
         self.user_config_dict = self.user_config.config_dict
@@ -730,13 +738,14 @@ class Config():
                 msg = "File does not exist: '{}'".format(filename)
                 logger.error(msg)
                 return
-            with open(filename, "r") as cfgfile:
-                cfg = self.serializer.unmarshal(cfgfile.read())
+            cfg = self.serializer.load(filename)
         else:
             cfgfile = FileHandler("open", "config").retfile
             if not cfgfile:
                 return
-            cfg = self.serializer.unmarshal(cfgfile.read())
+            filename = cfgfile.name
+            cfgfile.close()
+            cfg = self.serializer.load(filename)
 
         if not command and len(cfg.keys()) == 1:
             command = list(cfg.keys())[0]
@@ -754,8 +763,8 @@ class Config():
             else:
                 self.command_notebook.select(self.command_tabs["tools"])
                 self.command_notebook.tools_notebook.select(self.tools_command_tabs[command])
-        self.add_to_recent(cfgfile.name, command)
-        logger.debug("Loaded config: (command: '%s', cfgfile: '%s')", command, cfgfile)
+        self.add_to_recent(filename, command)
+        logger.debug("Loaded config: (command: '%s', filename: '%s')", command, filename)
 
     def get_command_options(self, cfg, command):
         """ return the saved options for the requested
@@ -786,11 +795,12 @@ class Config():
         cfgfile = FileHandler("save", "config").retfile
         if not cfgfile:
             return
-        cfg = self.cli_opts.get_option_values(command)
-        cfgfile.write(self.serializer.marshal(cfg))
+        filename = cfgfile.name
         cfgfile.close()
-        self.add_to_recent(cfgfile.name, command)
-        logger.debug("Saved config: (command: '%s', cfgfile: '%s')", command, cfgfile)
+        cfg = self.cli_opts.get_option_values(command)
+        self.serializer.save(filename, cfg)
+        self.add_to_recent(filename, command)
+        logger.debug("Saved config: (command: '%s', filename: '%s')", command, filename)
 
     def add_to_recent(self, filename, command):
         """ Add to recent files """
@@ -799,8 +809,7 @@ class Config():
         if not os.path.exists(recent_filename) or os.path.getsize(recent_filename) == 0:
             recent_files = list()
         else:
-            with open(recent_filename, "rb") as inp:
-                recent_files = self.serializer.unmarshal(inp.read().decode("utf-8"))
+            recent_files = self.serializer.load(recent_filename)
         logger.debug("Initial recent files: %s", recent_files)
         filenames = [recent[0] for recent in recent_files]
         if filename in filenames:
@@ -809,9 +818,7 @@ class Config():
         recent_files.insert(0, (filename, command))
         recent_files = recent_files[:20]
         logger.debug("Final recent files: %s", recent_files)
-        recent_json = self.serializer.marshal(recent_files)
-        with open(recent_filename, "wb") as out:
-            out.write(recent_json.encode("utf-8"))
+        self.serializer.save(recent_filename, recent_files)
 
 
 class ContextMenu(tk.Menu):  # pylint: disable=too-many-ancestors

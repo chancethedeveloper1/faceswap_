@@ -4,7 +4,7 @@
 import logging
 
 from lib.vgg_face import VGGFace
-from lib.utils import cv2_read_img
+from lib.image import read_image
 from plugins.extract.pipeline import Extractor
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -36,7 +36,7 @@ class FaceFilter():
         # already performed allocation. For now we force CPU detectors.
 
         # self.align_faces(detector, aligner, multiprocess)
-        self.align_faces("cv2-dnn", "cv2-dnn", multiprocess)
+        self.align_faces("cv2-dnn", "cv2-dnn", "none", multiprocess)
 
         self.get_filter_encodings()
         self.threshold = threshold
@@ -47,18 +47,21 @@ class FaceFilter():
         """ Load the images """
         retval = dict()
         for fpath in reference_file_paths:
-            retval[fpath] = {"image": cv2_read_img(fpath, raise_error=True),
+            retval[fpath] = {"image": read_image(fpath, raise_error=True),
                              "type": "filter"}
         for fpath in nreference_file_paths:
-            retval[fpath] = {"image": cv2_read_img(fpath, raise_error=True),
+            retval[fpath] = {"image": read_image(fpath, raise_error=True),
                              "type": "nfilter"}
         logger.debug("Loaded filter images: %s", {k: v["type"] for k, v in retval.items()})
         return retval
 
     # Extraction pipeline
-    def align_faces(self, detector_name, aligner_name, multiprocess):
+    def align_faces(self, detector_name, aligner_name, masker_name, multiprocess):
         """ Use the requested detectors to retrieve landmarks for filter images """
-        extractor = Extractor(detector_name, aligner_name, multiprocess=multiprocess)
+        extractor = Extractor(detector_name,
+                              aligner_name,
+                              masker_name,
+                              multiprocess=multiprocess)
         self.run_extractor(extractor)
         del extractor
         self.load_aligned_face()

@@ -9,7 +9,7 @@ import numpy as np
 
 from lib.queue_manager import queue_manager
 from plugins.extract.pipeline import Extractor
-from . import Annotate, ExtractedFaces, Frames, Legacy
+from . import Annotate, ExtractedFaces, Frames
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -445,7 +445,6 @@ class Manual():
                      self.__class__.__name__, alignments, arguments)
         self.arguments = arguments
         self.alignments = alignments
-        self.align_eyes = arguments.align_eyes
         self.frames = Frames(arguments.frames_dir)
         self.extracted_faces = None
         self.interface = None
@@ -455,13 +454,8 @@ class Manual():
 
     def process(self):
         """ Process manual extraction """
-        legacy = Legacy(self.alignments, self.arguments,
-                        frames=self.frames, child_process=True)
-        legacy.process()
-
         logger.info("[MANUAL PROCESSING]")  # Tidy up cli output
-        self.extracted_faces = ExtractedFaces(self.frames, self.alignments, size=256,
-                                              align_eyes=self.align_eyes)
+        self.extracted_faces = ExtractedFaces(self.frames, self.alignments, size=256)
         self.interface = Interface(self.alignments, self.frames)
         self.help = Help(self.interface)
         self.mouse_handler = MouseHandler(self.interface, self.arguments.loglevel)
@@ -787,11 +781,11 @@ class MouseHandler():
     def init_extractor(self):
         """ Initialize Aligner """
         logger.debug("Initialize Extractor")
-        extractor = Extractor("manual", "fan", multiprocess=True, normalize_method="hist")
+        extractor = Extractor("manual", "fan", None, multiprocess=True, normalize_method="hist")
         self.queues["in"] = extractor.input_queue
         # Set the batchsizes to 1
-        extractor.set_batchsize("detector", 1)
-        extractor.set_batchsize("aligner", 1)
+        for plugin_type in ("detect", "align"):
+            extractor.set_batchsize(plugin_type, 1)
         extractor.launch()
         logger.debug("Initialized Extractor")
         return extractor
@@ -929,6 +923,8 @@ class MouseHandler():
                                "manual_face": self.media["bounding_box"]})
         detected_face = next(self.extractor.detected_faces())["detected_faces"][0]
         alignment = detected_face.to_alignment()
+        # Mask will now be incorrect for updated landmarks so delete
+        alignment["mask"] = dict()
 
         frame = self.media["frame_id"]
 

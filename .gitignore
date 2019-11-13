@@ -8,11 +8,13 @@
 !*.png
 !*.py
 !*.rst
+!*.sh
 !*.txt
 !.cache
 !Dockerfile*
 !requirements*
 !.install/
+!.install/linux
 !.install/windows
 !docs
 !docs/full
@@ -28,8 +30,11 @@
 !plugins/extract/*
 !plugins/train/*
 !plugins/convert/*
+!.pylintrc
 !tools
 !tools/lib*
+!_travis
+!_travis/*
 !.travis.yml
 *.ini
 *.pyc

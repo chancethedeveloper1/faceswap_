@@ -9,7 +9,7 @@ import os
 import sys
 import time
 
-from json import JSONDecodeError
+from concurrent import futures
 
 import keras
 from keras import losses
@@ -18,13 +18,12 @@ from keras.layers import Input
 from keras.models import load_model, Model
 from keras.utils import get_custom_objects, multi_gpu_model
 
-from lib import Serializer
+from lib.serializer import get_serializer
 from lib.model.backup_restore import Backup
 from lib.model.losses import (DSSIMObjective, PenalizedLoss, gradient_loss, mask_loss_wrapper,
                               generalized_loss, l_inf_norm, gmsd_loss, gaussian_blur)
 from lib.model.nn_blocks import NNBlocks
 from lib.model.optimizers import Adam
-from lib.multithreading import MultiThread
 from lib.utils import deprecation_warning, FaceswapError
 from plugins.train._config import Config
 
@@ -421,12 +420,12 @@ class ModelBase():
             return
         for side in sorted(list(self.predictors.keys())):
             logger.verbose("[%s %s Summary]:", self.name.title(), side.upper())
-            self.predictors[side].summary(print_fn=lambda x: logger.verbose("R|%s", x))
+            self.predictors[side].summary(print_fn=lambda x: logger.verbose("%s", x))
             for name, nnmeta in self.networks.items():
                 if nnmeta.side is not None and nnmeta.side != side:
                     continue
                 logger.verbose("%s:", name.title())
-                nnmeta.network.summary(print_fn=lambda x: logger.verbose("R|%s", x))
+                nnmeta.network.summary(print_fn=lambda x: logger.verbose("%s", x))
 
     def do_snapshot(self):
         """ Perform a model snapshot """
@@ -466,21 +465,13 @@ class ModelBase():
         backup_func = self.backup.backup_model if self.should_backup(save_averages) else None
         if backup_func:
             logger.info("Backing up models...")
-        save_threads = list()
-        for network in self.networks.values():
-            name = "save_{}".format(network.name)
-            save_threads.append(MultiThread(network.save,
-                                            name=name,
-                                            backup_func=backup_func))
-        save_threads.append(MultiThread(self.state.save,
-                                        name="save_state",
-                                        backup_func=backup_func))
-        for thread in save_threads:
-            thread.start()
-        for thread in save_threads:
-            if thread.has_error:
-                logger.error(thread.errors[0])
-            thread.join()
+        executor = futures.ThreadPoolExecutor()
+        save_threads = [executor.submit(network.save, backup_func=backup_func)
+                        for network in self.networks.values()]
+        save_threads.append(executor.submit(self.state.save, backup_func=backup_func))
+        futures.wait(save_threads)
+        # call result() to capture errors
+        _ = [thread.result() for thread in save_threads]
         msg = "[Saved models]"
         if save_averages:
             lossmsg = ["{}_{}: {:.5f}".format(self.state.loss_names[side][0],
@@ -664,7 +655,7 @@ class Loss():
         loss_dict = dict(mae=losses.mean_absolute_error,
                          mse=losses.mean_squared_error,
                          logcosh=losses.logcosh,
-                         smooth_l=generalized_loss,
+                         smooth_loss=generalized_loss,
                          l_inf_norm=l_inf_norm,
                          ssim=DSSIMObjective(),
                          gmsd=gmsd_loss,
@@ -876,8 +867,8 @@ class State():
                      "config_changeable_items: '%s', no_logs: %s, pingpong: %s, "
                      "training_image_size: '%s'", self.__class__.__name__, model_dir, model_name,
                      config_changeable_items, no_logs, pingpong, training_image_size)
-        self.serializer = Serializer.get_serializer("json")
-        filename = "{}_state.{}".format(model_name, self.serializer.ext)
+        self.serializer = get_serializer("json")
+        filename = "{}_state.{}".format(model_name, self.serializer.file_extension)
         self.filename = str(model_dir / filename)
         self.name = model_name
         self.iterations = 0
@@ -889,7 +880,7 @@ class State():
         self.config = dict()
         self.load(config_changeable_items)
         self.session_id = self.new_session_id()
-        self.create_new_session(no_logs, pingpong)
+        self.create_new_session(no_logs, pingpong, config_changeable_items)
         logger.debug("Initialized %s:", self.__class__.__name__)
 
     @property
@@ -926,7 +917,7 @@ class State():
         logger.debug(session_id)
         return session_id
 
-    def create_new_session(self, no_logs, pingpong):
+    def create_new_session(self, no_logs, pingpong, config_changeable_items):
         """ Create a new session """
         logger.debug("Creating new session. id: %s", self.session_id)
         self.sessions[self.session_id] = {"timestamp": time.time(),
@@ -934,7 +925,8 @@ class State():
                                           "pingpong": pingpong,
                                           "loss_names": dict(),
                                           "batchsize": 0,
-                                          "iterations": 0}
+                                          "iterations": 0,
+                                          "config": config_changeable_items}
 
     def add_session_loss_names(self, side, loss_names):
         """ Add the session loss names to the sessions dictionary """
@@ -954,42 +946,33 @@ class State():
     def load(self, config_changeable_items):
         """ Load state file """
         logger.debug("Loading State")
-        try:
-            with open(self.filename, "rb") as inp:
-                state = self.serializer.unmarshal(inp.read().decode("utf-8"))
-                self.name = state.get("name", self.name)
-                self.sessions = state.get("sessions", dict())
-                self.lowest_avg_loss = state.get("lowest_avg_loss", dict())
-                self.iterations = state.get("iterations", 0)
-                self.training_size = state.get("training_size", 256)
-                self.inputs = state.get("inputs", dict())
-                self.config = state.get("config", dict())
-                logger.debug("Loaded state: %s", state)
-                self.replace_config(config_changeable_items)
-        except IOError as err:
-            logger.warning("No existing state file found. Generating.")
-            logger.debug("IOError: %s", str(err))
-        except JSONDecodeError as err:
-            logger.debug("JSONDecodeError: %s:", str(err))
+        if not os.path.exists(self.filename):
+            logger.info("No existing state file found. Generating.")
+            return
+        state = self.serializer.load(self.filename)
+        self.name = state.get("name", self.name)
+        self.sessions = state.get("sessions", dict())
+        self.lowest_avg_loss = state.get("lowest_avg_loss", dict())
+        self.iterations = state.get("iterations", 0)
+        self.training_size = state.get("training_size", 256)
+        self.inputs = state.get("inputs", dict())
+        self.config = state.get("config", dict())
+        logger.debug("Loaded state: %s", state)
+        self.replace_config(config_changeable_items)
 
     def save(self, backup_func=None):
         """ Save iteration number to state file """
         logger.debug("Saving State")
         if backup_func:
             backup_func(self.filename)
-        try:
-            with open(self.filename, "wb") as out:
-                state = {"name": self.name,
-                         "sessions": self.sessions,
-                         "lowest_avg_loss": self.lowest_avg_loss,
-                         "iterations": self.iterations,
-                         "inputs": self.inputs,
-                         "training_size": self.training_size,
-                         "config": _CONFIG}
-                state_json = self.serializer.marshal(state)
-                out.write(state_json.encode("utf-8"))
-        except IOError as err:
-            logger.error("Unable to save model state: %s", str(err.strerror))
+        state = {"name": self.name,
+                 "sessions": self.sessions,
+                 "lowest_avg_loss": self.lowest_avg_loss,
+                 "iterations": self.iterations,
+                 "inputs": self.inputs,
+                 "training_size": self.training_size,
+                 "config": _CONFIG}
+        self.serializer.save(self.filename, state)
         logger.debug("Saved State")
 
     def replace_config(self, config_changeable_items):
