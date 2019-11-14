@@ -222,6 +222,8 @@ class Extract():
                         self._alignments.save()
                 else:
                     del faces["image"]
+                    # cache detected faces for next run
+                    detected_faces[faces["filename"]] = faces
                 status_bar.update(1)
 
             if not is_final:
@@ -272,7 +274,7 @@ class Extract():
         faces: dict
             The output dictionary from :class:`plugins.extract.Pipeline.Extractor`
         """
-        logger.debug("Save Faces: Start")
+        logger.trace("Outputting faces for %s", faces["filename"])
         final_faces = list()
         filename, extension = os.path.splitext(os.path.basename(faces["filename"]))
         for idx, face in enumerate(faces["detected_faces"]):
