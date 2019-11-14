@@ -19,7 +19,7 @@ from lib.serializer import get_serializer_from_filename
 from lib.faces_detect import DetectedFace
 from lib.image import read_image
 from lib.queue_manager import queue_manager
-from plugins.extract.recognition.vgg_face.vgg_face2 import VGGFace2 as VGGFace
+from plugins.extract.recognition.vgg_face.vgg_face_2 import VGGFace2 as VGGFace
 from plugins.plugin_loader import PluginLoader
 
 from . import cli

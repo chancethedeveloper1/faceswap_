@@ -4,7 +4,7 @@
 import logging
 
 from lib.image import read_image
-from plugins.extract.recognition.vgg_face.vgg_face2 import VGGFace2 as VGGFace
+from plugins.extract.recognition.vgg_face.vgg_face_2 import VGGFace2 as VGGFace
 from plugins.extract.pipeline import Extractor
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
