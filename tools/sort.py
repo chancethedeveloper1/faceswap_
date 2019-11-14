@@ -85,6 +85,35 @@ class Sort():
     @staticmethod
     def launch_aligner():
         """ Load the aligner plugin to retrieve landmarks """
+        for plugin in ("fan", "cv2_dnn"):
+            aligner = PluginLoader.get_aligner(plugin)(loglevel=self.args.loglevel)
+            process = SpawnProcess(aligner.run, **kwargs)
+            event = process.event
+            process.start()
+            # Wait for Aligner to take init
+            # The first ever load of the model for FAN has reportedly taken
+            # up to 3-4 minutes, hence high timeout.
+            event.wait(300)
+
+            if not event.is_set():
+                if plugin == "fan":
+                    process.join()
+                    logger.error("Error initializing FAN. Trying CV2-DNN")
+                    continue
+                else:
+                    raise ValueError("Error inititalizing Aligner")
+            if plugin == "cv2_dnn":
+                return
+
+            try:
+                err = None
+                err = out_queue.get(True, 1)
+            except QueueEmpty:
+                pass
+            if not err:
+                break
+            process.join()
+            logger.error("Error initializing FAN. Trying CV2-DNN")
         kwargs = dict(in_queue=queue_manager.get_queue("in"),
                       out_queue=queue_manager.get_queue("out"),
                       queue_size=8)
@@ -98,6 +127,7 @@ class Sort():
         """ Set the image to a dict for alignment """
         height, width = image.shape[:2]
         face = DetectedFace(x=0, w=width, y=0, h=height)
+        face = face.to_bounding_box_dict()
         return {"image": image,
                 "filename": filename,
                 "detected_faces": [face]}
