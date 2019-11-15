@@ -13,7 +13,6 @@ import cv2
 import imageio
 
 from lib.alignments import Alignments as AlignmentsBase
-from lib.face_filter import FaceFilter as FilterFunc
 from lib.image import count_frames, read_image
 from lib.utils import (camel_case_split, get_image_paths, set_system_verbosity, _video_extensions)
 
@@ -236,36 +235,8 @@ class PostProcess():
         """ Set the post processing actions """
         postprocess_items = dict()
         # Debug Landmarks
-        if (hasattr(self.args, 'debug_landmarks')
-                and self.args.debug_landmarks):
+        if (hasattr(self.args, 'debug_landmarks') and self.args.debug_landmarks):
             postprocess_items["DebugLandmarks"] = None
-
-        # Face Filter post processing
-        if ((hasattr(self.args, "filter") and self.args.filter is not None) or
-                (hasattr(self.args, "nfilter") and
-                 self.args.nfilter is not None)):
-
-            if hasattr(self.args, "detector"):
-                detector = self.args.detector.replace("-", "_").lower()
-            else:
-                detector = "cv2_dnn"
-            if hasattr(self.args, "aligner"):
-                aligner = self.args.aligner.replace("-", "_").lower()
-            else:
-                aligner = "cv2_dnn"
-
-            face_filter = dict(detector=detector,
-                               aligner=aligner,
-                               multiprocess=not self.args.singleprocess)
-            filter_lists = dict()
-            if hasattr(self.args, "ref_threshold"):
-                face_filter["ref_threshold"] = self.args.ref_threshold
-            for filter_type in ('filter', 'nfilter'):
-                filter_args = getattr(self.args, filter_type, None)
-                filter_args = None if not filter_args else filter_args
-                filter_lists[filter_type] = filter_args
-            face_filter["filter_lists"] = filter_lists
-            postprocess_items["FaceFilter"] = {"kwargs": face_filter}
 
         logger.debug("Postprocess Items: %s", postprocess_items)
         return postprocess_items
@@ -304,68 +275,3 @@ class DebugLandmarks(PostProcessAction):  # pylint: disable=too-few-public-metho
             aligned_landmarks = face.aligned_landmarks
             for (pos_x, pos_y) in aligned_landmarks:
                 cv2.circle(face.aligned_face, (pos_x, pos_y), 2, (0, 0, 255), -1)
-
-
-class FaceFilter(PostProcessAction):
-    """ Filter in or out faces based on input image(s)
-        Extract or Convert """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        logger.info("Extracting and aligning face for Face Filter...")
-        self.filter = self.load_face_filter(**kwargs)
-        logger.debug("Initialized %s", self.__class__.__name__)
-
-    def load_face_filter(self, filter_lists, ref_threshold, aligner, detector,
-                         multiprocess):
-        """ Load faces to filter out of images """
-        if not any(val for val in filter_lists.values()):
-            return None
-
-        facefilter = None
-        filter_files = [self.set_face_filter(f_type, filter_lists[f_type])
-                        for f_type in ("filter", "nfilter")]
-
-        if any(filters for filters in filter_files):
-            facefilter = FilterFunc(filter_files[0],
-                                    filter_files[1],
-                                    detector,
-                                    aligner,
-                                    multiprocess,
-                                    ref_threshold)
-            logger.debug("Face filter: %s", facefilter)
-        else:
-            self.valid = False
-        return facefilter
-
-    @staticmethod
-    def set_face_filter(f_type, f_args):
-        """ Set the required filters """
-        if not f_args:
-            return list()
-
-        logger.info("%s: %s", f_type.title(), f_args)
-        filter_files = f_args if isinstance(f_args, list) else [f_args]
-        filter_files = list(filter(lambda fpath: Path(fpath).exists(), filter_files))
-        if not filter_files:
-            logger.warning("Face %s files were requested, but no files could be found. This "
-                           "filter will not be applied.", f_type)
-        logger.debug("Face Filter files: %s", filter_files)
-        return filter_files
-
-    def process(self, output_item):
-        """ Filter in/out wanted/unwanted faces """
-        if not self.filter:
-            return
-        ret_faces = list()
-        for idx, detect_face in enumerate(output_item["detected_faces"]):
-            check_item = detect_face["face"] if isinstance(detect_face, dict) else detect_face
-            check_item.load_aligned(output_item["image"])
-            if not self.filter.check(check_item):
-                logger.verbose("Skipping not recognized face: (Frame: %s Face %s)",
-                               output_item["filename"], idx)
-                continue
-            logger.trace("Accepting recognised face. Frame: %s. Face: %s",
-                         output_item["filename"], idx)
-            ret_faces.append(detect_face)
-        output_item["detected_faces"] = ret_faces

@@ -140,10 +140,11 @@ class Align(Aligner):
 
         flat_indices = batch["prediction"].reshape(num_images, num_landmarks, -1).argmax(-1)
         indices = np.array(np.unravel_index(flat_indices, (height, width)))
-        offsets = [(image_slice, landmark_slice, indices[0], indices[1] + 1),
-                   (image_slice, landmark_slice, indices[0], indices[1] - 1),
-                   (image_slice, landmark_slice, indices[0] + 1, indices[1]),
-                   (image_slice, landmark_slice, indices[0] - 1, indices[1])]
+        offsets = [(image_slice, landmark_slice, indices[0], min(width, indices[1] + 1)),
+                   (image_slice, landmark_slice, indices[0], max(0, indices[1] - 1)),
+                   (image_slice, landmark_slice, min(height, indices[0] + 1), indices[1]),
+                   (image_slice, landmark_slice, max(0, indices[0] - 1), indices[1])]
+        
         x_subpixel_shift = batch["prediction"][offsets[0]] - batch["prediction"][offsets[1]]
         y_subpixel_shift = batch["prediction"][offsets[2]] - batch["prediction"][offsets[3]]
         # TODO improve rudimentary subpixel logic to centroid of 3x3 window algorithm
