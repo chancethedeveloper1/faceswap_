@@ -214,17 +214,3 @@ class Masker(Extractor):  # pylint:disable=abstract-method
             logger.trace("Yielding: (filename: '%s', image: %s, detected_faces: %s)",
                          retval["filename"], retval["image"].shape, len(retval["detected_faces"]))
             yield retval
-
-    # <<< PROTECTED ACCESS METHODS >>> #
-    @staticmethod
-    def _resize(image, target_size):
-        """ resize input and output of mask models appropriately """
-        height, width, channels = image.shape
-        image_size = max(height, width)
-        scale = target_size / image_size
-        if scale == 1.:
-            return image
-        method = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA  # pylint: disable=no-member
-        resized = cv2.resize(image, (0, 0), fx=scale, fy=scale, interpolation=method)
-        resized = resized if channels > 1 else resized[..., None]
-        return resized

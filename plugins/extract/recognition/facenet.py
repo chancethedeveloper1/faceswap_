@@ -42,6 +42,7 @@ class Facenet(Recognizer):
         self.vram_per_batch = 1 # TODO
         self.threshold=0.4 # 0.3 to 0.6 higher excludes both some real matches and false positives
         self.batchsize = self.config["batch-size"]
+        self.colorformat = "RGB"
 
     def init_model(self):
         """ Initialize Keras VGG Face2 Recognizer Model"""
@@ -65,17 +66,14 @@ class Facenet(Recognizer):
         logger.debug("Compiling faces for prediction")
         input_ = np.array([face.feed_face[..., :3]
                            for face in batch["detected_faces"]], dtype="float32")
-        batch["feed"] = input_
+        batch["feed"] = (input_ - 127.5) / 128.0
         logger.trace("feed shape: %s", batch["feed"].shape)
         return batch
 
-    def predict(self, face):
+    def predict(self, batch):
         """ Run model to get predictions """
         logger.debug("Predicting face encoding")
-        face = self._resize(face, self.input_size)
-        face = (face[None, :, :, :3:-1] - 127.5) / 128.0 # BGR to RGB
-        predictions = self.model.predict(face)
-        predictions = predictions
+        predictions = self.model.predict(batch["feed"])
         return predictions
 
     def process_output(self, batch):

@@ -217,19 +217,6 @@ class Recognizer(Extractor):  # pylint:disable=abstract-method
 
     # <<< PROTECTED ACCESS METHODS >>> #
     @staticmethod
-    def _resize(image, target_size):
-        """ resize input and output of recognition models appropriately """
-        height, width, channels = image.shape
-        image_size = max(height, width)
-        scale = target_size / image_size
-        if scale == 1.:
-            return image
-        method = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA
-        resized = cv2.resize(image, (0, 0), fx=scale, fy=scale, interpolation=method)
-        resized = resized if channels > 1 else resized[..., None]
-        return resized
-
-    @staticmethod
     def find_cosine_similiarity(source_face, test_face, subtract_mean=False):
         """ Find the cosine similarity between a source face and a test face """
         # mean = np.mean(np.concatenate([embeddings1[train_set], embeddings2[train_set]]), axis=0)

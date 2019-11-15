@@ -44,23 +44,20 @@ class VGGFace(Recognizer):
         logger.debug("Compiling faces for prediction")
         input_ = np.array([face.feed_face[..., :3]
                            for face in batch["detected_faces"]], dtype="float32")
-        batch["feed"] = input_ - self.average_img
+        batch["feed"] = cv2.dnn.blobFromImages(input_,
+                                     scalefactor=1.0,
+                                     size=(self.input_size, self.input_size),
+                                     mean=self.average_img,
+                                     swapRB=False,
+                                     crop=False)
         logger.trace("feed shape: %s", batch["feed"].shape)
         return batch
 
-    def predict(self, face):
+    def predict(self, batch):
         """ Return encodings for given image from vgg_face """
         logger.debug("Predicting face encoding")
-        face = self._resize(face, self.input_size)
-        feed = cv2.dnn.blobFromImage(face[..., :3],
-                                     1.0,
-                                     (self.input_size, self.input_size),
-                                     self.average_img,
-                                     False,
-                                     False)
-        self.model.setInput(feed)
-        predictions = self.model.forward("fc7")
-        predictions = predictions[0, :]
+        self.model.setInput(batch["feed"])
+        predictions = self.model.forward("fc7")[0, :]
         return predictions
 
     def process_output(self, batch):

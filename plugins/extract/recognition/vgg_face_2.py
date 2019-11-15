@@ -58,13 +58,10 @@ class VGGFace2(Recognizer):
         logger.trace("feed shape: %s", batch["feed"].shape)
         return batch
 
-    def predict(self, face):
+    def predict(self, batch):
         """ Run model to get predictions """
         logger.debug("Predicting face encoding")
-        face = self._resize(face, self.input_size)
-        face = face[None, :, :, :3] - self.average_img
-        predictions = self.model.predict(face)
-        predictions = predictions[0, :]
+        predictions = self.model.predict(batch["feed"])[0, :]
         return predictions
 
     def process_output(self, batch):
