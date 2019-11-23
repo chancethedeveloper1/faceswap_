@@ -60,13 +60,13 @@ class Extractor():
         The current phase that the pipeline is running. Used in conjunction with :attr:`passes` and
         :attr:`final_pass` to indicate to the caller which phase is being processed
     """
-    def __init__(self, detector, aligner, masker, configfile=None,
+    def __init__(self, detector, aligner, masker, recognizer=None, configfile=None,
                  multiprocess=False, rotate_images=None, min_size=20,
                  normalize_method=None, image_is_aligned=False):
-        logger.debug("Initializing %s: (detector: %s, aligner: %s, masker: %s, "
+        logger.debug("Initializing %s: (detector: %s, aligner: %s, masker: %s, recognizer: %s, "
                      "configfile: %s, multiprocess: %s, rotate_images: %s, min_size: %s, "
                      "normalize_method: %s, image_is_aligned: %s)",
-                     self.__class__.__name__, detector, aligner, masker, configfile,
+                     self.__class__.__name__, detector, aligner, masker, recognizer, configfile,
                      multiprocess, rotate_images, min_size, normalize_method, image_is_aligned)
         self._flow = self._set_flow(detector, aligner, masker)
         self.phase = self._flow[0]
@@ -76,6 +76,7 @@ class Extractor():
         self._vram_buffer = 256  # Leave a buffer for VRAM allocation
         self._detect = self._load_detect(detector, rotate_images, min_size, configfile)
         self._align = self._load_align(aligner, configfile, normalize_method)
+        self._recognition = self._load_recognition(recognizer, image_is_aligned, configfile)
         self._mask = self._load_mask(masker, image_is_aligned, configfile)
         self._is_parallel = self._set_parallel_processing(multiprocess)
         self._set_extractor_batchsize()
@@ -388,6 +389,18 @@ class Extractor():
                                                             min_size=min_size,
                                                             configfile=configfile)
         return detector
+
+    @staticmethod
+    def _load_recognition(recognizer, image_is_aligned, configfile):
+        """ Set global arguments and load recognition plugin """
+        if recognizer is None or recognizer.lower() == "none":
+            logger.debug("No recognizer selected. Returning None")
+            return None
+        recognizer_name = recognizer.replace("-", "_").lower()
+        logger.debug("Loading Recognizer: '%s'", recognizer_name)
+        recognizer = PluginLoader.get_recognizer(recognizer_name)(image_is_aligned=image_is_aligned,
+                                                                  configfile=configfile)
+        return recognizer
 
     @staticmethod
     def _load_mask(masker, image_is_aligned, configfile):

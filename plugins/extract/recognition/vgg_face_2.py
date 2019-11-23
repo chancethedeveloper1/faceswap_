@@ -13,7 +13,7 @@ from lib.model.layers import L2_normalize
 from ._base import Recognizer, logger
 
 
-class VGGFace2(Recognizer):
+class Recognition(Recognizer):
     """ VGG Face feature extraction.
         Input images should be in BGR Order """
     def __init__(self, **kwargs):
@@ -28,7 +28,8 @@ class VGGFace2(Recognizer):
         # Average image provided in https://github.com/ox-vgg/vgg_face2
         self.average_img = np.array([91.4953, 103.8827, 131.0912])
         self.threshold=0.4 # 0.3 to 0.6 higher excludes both some real matches and false positives
-        self.batchsize = self.config["batch-size"]
+        self.batchsize = 1
+        # self.batchsize = self.config["batch-size"]
 
     def init_model(self):
         """ Initialize Keras VGG Face2 Recognizer Model"""
@@ -49,22 +50,20 @@ class VGGFace2(Recognizer):
         placeholder = np.zeros(shape, dtype="float32")
         self.model.predict(placeholder)
 
-    def process_input(self, batch):
+    def process_input(self, image_batch):
         """ Compile the detected faces for prediction """
         logger.debug("Compiling faces for prediction")
-        input_ = np.array([face.feed_face[..., :3]
-                           for face in batch["detected_faces"]], dtype="float32")
-        batch["feed"] = input_ - self.average_img
-        logger.trace("feed shape: %s", batch["feed"].shape)
-        return batch
+        processed_batch = image_batch - self.average_img
+        logger.trace("feed shape: %s", processed_batch.shape)
+        return processed_batch
 
-    def predict(self, batch):
+    def predict(self, image_batch):
         """ Run model to get predictions """
         logger.debug("Predicting face encoding")
-        predictions = self.model.predict(batch["feed"])[0, :]
+        predictions = self.model.predict(image_batch)[0, :]
         return predictions
 
-    def process_output(self, batch):
+    def process_output(self, image_batch):
         """ Compile face encodings for output """
         logger.debug("Processing recognition model output")
-        return batch
+        return image_batch

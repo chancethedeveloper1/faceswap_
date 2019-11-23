@@ -28,7 +28,7 @@ from lib.model.layers import L2_normalize
 from ._base import Recognizer, logger
 
 
-class Facenet(Recognizer):
+class Recognition(Recognizer):
     """ Facenet feature extraction.
         Input images should be in RGB Order """
     def __init__(self, **kwargs):
@@ -41,7 +41,8 @@ class Facenet(Recognizer):
         self.vram_warnings = 1 # TODO  # at BS 1. OOMs at higher batchsizes
         self.vram_per_batch = 1 # TODO
         self.threshold=0.4 # 0.3 to 0.6 higher excludes both some real matches and false positives
-        self.batchsize = self.config["batch-size"]
+        self.batchsize = 1
+        # self.batchsize = self.config["batch-size"]
         self.colorformat = "RGB"
 
     def init_model(self):
@@ -61,22 +62,20 @@ class Facenet(Recognizer):
         placeholder = np.zeros(shape, dtype="float32")
         self.model.predict(placeholder)
 
-    def process_input(self, batch):
+    def process_input(self, image_batch):
         """ Compile the detected faces for prediction """
         logger.debug("Compiling faces for prediction")
-        input_ = np.array([face.feed_face[..., :3]
-                           for face in batch["detected_faces"]], dtype="float32")
-        batch["feed"] = (input_ - 127.5) / 128.0
-        logger.trace("feed shape: %s", batch["feed"].shape)
-        return batch
+        processed_batch = (image_batch - 127.5) / 128.0
+        logger.trace("feed shape: %s", processed_batch.shape)
+        return processed_batch
 
-    def predict(self, batch):
+    def predict(self, image_batch):
         """ Run model to get predictions """
         logger.debug("Predicting face encoding")
-        predictions = self.model.predict(batch["feed"])
+        predictions = self.model.predict(image_batch)
         return predictions
 
-    def process_output(self, batch):
+    def process_output(self, image_batch):
         """ Compile face encodings for output """
         logger.debug("Processing recognition model output")
-        return batch
+        return image_batch

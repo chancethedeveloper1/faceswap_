@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 
+from pathlib import Path
 from tqdm import tqdm
 
 from lib.image import encode_image_with_hash, ImagesLoader, ImagesSaver
@@ -56,6 +57,7 @@ class Extract():
         self._extractor = Extractor(self._args.detector,
                                     self._args.aligner,
                                     self._args.masker,
+                                    self._args.recognizer,
                                     configfile=configfile,
                                     multiprocess=not self._args.singleprocess,
                                     rotate_images=self._args.rotate_images,
@@ -248,11 +250,41 @@ class Extract():
         size: int
             The size that the aligned face should be created at
         """
+
         for face in faces["detected_faces"]:
             face.load_aligned(faces["image"], size=size)
 
+        filter_list = []
+        for filter_op in ["filter", "nfilter"]:
+            filter_files = getattr(self._args, filter_op, list())
+            filter_files = filter_files if isinstance(filter_files, list) else [filter_files]
+            filter_files = [file_path for file_path in filter_files if Path(file_path).exists()]
+            if filter_files:
+                logger.verbose("Face Recognition %s files: %s", filter_op, filter_files)
+            else:
+                logger.warning("Face Recognition %s files were specified but no actual files "
+                               "could be found to run this operation.", filter_op)
+            filter_list.append(filter_files)
+
+        include_filter = filter_list[0]
+        exclude_filter = filter_list[1]
+        if include_filter or exclude_filter:
+            face_filter = FilterFunc(include_filter,
+                                     exclude_filter,
+                                     self._extractor,
+                                     self._args.ref_threshold)
+            desired_faces = list()
+            for face in faces["detected_faces"]:
+                face.load_feed_face(faces["image"], size=224, coverage_ratio=1.0)
+                if face_filter.check(face.feed_face):
+                    message = "accepted"
+                    desired_faces.append(face)
+                else:
+                    message = "rejected"
+                logger.verbose("Recognized face %s: Frame: %s", message, output_item["filename"])
+            faces["detected_faces"] = desired_faces
+
         self._post_process.do_actions(faces)
-        ### face filter ###
 
         faces_count = len(faces["detected_faces"])
         if faces_count == 0:
@@ -286,68 +318,3 @@ class Extract():
             saver.save(output_filename, image)
             final_faces.append(face.to_alignment())
         self._alignments.data[os.path.basename(faces["filename"])] = final_faces
-
-        
-        
-                # Face Filter post processing
-        if ((hasattr(self.args, "filter") and self.args.filter is not None) or
-            (hasattr(self.args, "nfilter") and self.args.nfilter is not None)):
-
-            filter_file_lists = dict(filter=getattr(self.args, 'filter', None),
-                                     nfilter=getattr(self.args, 'nfilter', None)
-            face_filter = dict(detector=self.args.detector,
-                               aligner=self.args.aligner,
-                               multiprocess=not self.args.singleprocess,
-                               ref_threshold=self.args.ref_threshold,
-                               filter_file_lists=filter_file_lists)
-            postprocess_items["FaceFilter"] = {"kwargs": face_filter}
-        
-        
-    def load_face_filter(self, filter_file_lists, ref_threshold, aligner, detector, multiprocess):
-        """ Load faces to filter out of images """
-
-        include_filter = self.verify_files("filter", filter_file_lists["filter"])
-        exclude_filter = self.verify_files("nfilter", filter_file_lists["nfilter"])
-
-        if include_filter or exclude_filter:
-            facefilter = FilterFunc(include_filter,
-                                    exclude_filter,
-                                    detector,
-                                    aligner,
-                                    multiprocess,
-                                    ref_threshold)
-            logger.debug("Face filter: %s", facefilter)
-        else:
-            facefilter = None
-            self.valid = False
-        return facefilter
-
-    @staticmethod
-    def verify_files(f_type, f_args):
-        """ Set the required filters """
-        if not f_args:
-            return list()
-
-        logger.info("%s: %s", f_type.title(), f_args)
-        filter_files = f_args if isinstance(f_args, list) else [f_args]
-        filter_files = [file_path for file_path in filter_files if Path(file_path).exists()]
-        if not filter_files:
-            logger.warning("Face %s files were requested, but no files could be found. This "
-                           "filter will not be applied.", f_type)
-        logger.debug("Face Filter files: %s", filter_files)
-        return filter_files
-        
-    def process(self, output_item):
-        """ Filter in/out wanted/unwanted faces """
-        if not self.filter:
-            return
-        desired_faces = list()
-        for idx, detect_face in enumerate(output_item["detected_faces"]):
-            check_item = detect_face["face"] if isinstance(detect_face, dict) else detect_face
-            check_item.load_aligned(output_item["image"])
-            if not self.filter.check(check_item):
-                logger.verbose("Skipping not recognized face: (Frame: %s Face %s)", output_item["filename"], idx)
-                continue
-            logger.trace("Accepting recognised face. Frame: %s. Face: %s", output_item["filename"], idx)
-            desired_faces.append(detect_face)
-        output_item["detected_faces"] = desired_faces

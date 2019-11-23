@@ -59,25 +59,6 @@ class PluginLoader():
         return PluginLoader._import("extract.align", name, disable_logging)
 
     @staticmethod
-    def get_masker(name, disable_logging=False):
-        """ Return requested masker plugin
-
-        Parameters
-        ----------
-        name: str
-            The name of the requested masker plugin
-        disable_logging: bool, optional
-            Whether to disable the INFO log message that the plugin is being imported.
-            Default: `False`
-
-        Returns
-        -------
-        :class:`plugins.extract.mask` object:
-            An extraction masker plugin
-        """
-        return PluginLoader._import("extract.mask", name, disable_logging)
-
-    @staticmethod
     def get_recognizer(name, disable_logging=False):
         """ Return requested recognizer plugin
 
@@ -95,6 +76,25 @@ class PluginLoader():
             An extraction recognition plugin
         """
         return PluginLoader._import("extract.recognition", name, disable_logging)
+
+    @staticmethod
+    def get_masker(name, disable_logging=False):
+        """ Return requested masker plugin
+
+        Parameters
+        ----------
+        name: str
+            The name of the requested masker plugin
+        disable_logging: bool, optional
+            Whether to disable the INFO log message that the plugin is being imported.
+            Default: `False`
+
+        Returns
+        -------
+        :class:`plugins.extract.mask` object:
+            An extraction masker plugin
+        """
+        return PluginLoader._import("extract.mask", name, disable_logging)
 
     @staticmethod
     def get_model(name, disable_logging=False):

@@ -12,7 +12,7 @@ from lib.model.session import KSession
 from ._base import Recognizer, logger
 
 
-class VGGFace(Recognizer):
+class Recognition(Recognizer):
     """ VGG Face feature extraction.
         Input images should be in BGR Order """
     def __init__(self, **kwargs):
@@ -28,7 +28,8 @@ class VGGFace(Recognizer):
         self.average_img = [129.1863, 104.7624, 93.5940]
         self.threshold=0.4 # 0.3 to 0.6 higher excludes both some real matches and false positives
         self.backend = "CPU" # TODO allow GPU
-        self.batchsize = self.config["batch-size"]
+        self.batchsize = 1
+        # self.batchsize = self.config["batch-size"]
         
     def init_model(self):
         """ Initialize CV2 DNN Recognizer Model"""
@@ -39,29 +40,27 @@ class VGGFace(Recognizer):
         cv2_backend = getattr(cv2.dnn, "DNN_TARGET_{}".format(self.backend))
         self.model.setPreferableTarget(cv2_backend)
 
-    def process_input(self, batch):
+    def process_input(self, image_batch):
         """ Compile the detected faces for prediction """
         logger.debug("Compiling faces for prediction")
-        input_ = np.array([face.feed_face[..., :3]
-                           for face in batch["detected_faces"]], dtype="float32")
-        batch["feed"] = cv2.dnn.blobFromImages(input_,
-                                     scalefactor=1.0,
-                                     size=(self.input_size, self.input_size),
-                                     mean=self.average_img,
-                                     swapRB=False,
-                                     crop=False)
-        logger.trace("feed shape: %s", batch["feed"].shape)
-        return batch
+        processed_batch = cv2.dnn.blobFromImages(image_batch,
+                                                 scalefactor=1.0,
+                                                 size=(self.input_size, self.input_size),
+                                                 mean=self.average_img,
+                                                 swapRB=False,
+                                                 crop=False)
+        logger.trace("feed shape: %s", processed_batch.shape)
+        return processed_batch
 
-    def predict(self, batch):
+    def predict(self, image_batch):
         """ Return encodings for given image from vgg_face """
         logger.debug("Predicting face encoding")
-        self.model.setInput(batch["feed"])
+        self.model.setInput(image_batch)
         predictions = self.model.forward("fc7")[0, :]
         return predictions
 
-    def process_output(self, batch):
+    def process_output(self, image_batch):
         """ Compile face encodings for output """
         logger.debug("Processing recognition model output")
-        return batch
+        return image_batch
 

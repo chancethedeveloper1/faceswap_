@@ -19,7 +19,7 @@ from lib.serializer import get_serializer_from_filename
 from lib.faces_detect import DetectedFace
 from lib.image import read_image
 from lib.queue_manager import queue_manager
-from plugins.extract.recognition.vgg_face.vgg_face_2 import VGGFace2 as VGGFace
+from plugins.extract.recognition.vgg_face_2 import Recognition as VGGFace
 from plugins.plugin_loader import PluginLoader
 
 from . import cli
@@ -206,7 +206,7 @@ class Sort():
         filename_list, image_list = self._get_images()
 
         logger.info("Calculating face identifiers...")
-        preds = np.array([self.vgg_face.predict(img)
+        preds = np.array([self.vgg_face.predict(self.vgg_face.process_input(img))
                           for img in tqdm(image_list, desc="Calculating...", file=sys.stdout)])
 
         logger.info("Sorting by ward linkage...")
