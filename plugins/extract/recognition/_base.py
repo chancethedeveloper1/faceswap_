@@ -19,8 +19,9 @@ For each source item, the plugin must pass a dict to finalize containing:
 """
 
 import cv2
+import psutil
 import numpy as np
-from fastcluster import linkage
+from fastcluster import linkage, linkage_vector
 
 from plugins.extract._base import Extractor, logger
 
@@ -218,7 +219,19 @@ class Recognizer(Extractor):  # pylint:disable=abstract-method
     # <<< PROTECTED ACCESS METHODS >>> #
     @staticmethod
     def find_cosine_similiarity(source_face, test_face, subtract_mean=False):
-        """ Find the cosine similarity between a source face and a test face """
+        """ Find the cosine similarity between two faces.
+
+        Parameters
+        ----------
+        source_face: numpy.ndarray
+            The first face to test against :attr:`test_face`
+        test_face: numpy.ndarray
+            The second face to test against :attr:`source_face`
+        Returns
+        -------
+        float:
+            The cosine similarity between the two faces
+        """
         # mean = np.mean(np.concatenate([embeddings1[train_set], embeddings2[train_set]]), axis=0)
         # dist = distance(embeddings1-mean, embeddings2-mean, distance_metric)
         var_a = np.matmul(np.transpose(source_face), test_face)
@@ -235,36 +248,106 @@ class Recognizer(Extractor):  # pylint:disable=abstract-method
         return cosine_similiarity
 
     def sorted_similarity(self, predictions, method="ward"):
-        """ Sort a matrix of predictions by similarity Adapted from:
-            https://gmarti.gitlab.io/ml/2017/09/07/how-to-sort-distance-matrix.html
-        input:
-            - predictions is a stacked matrix of vgg_face predictions shape: (x, 4096)
-            - method = ["ward","single","average","complete"]
-        output:
-            - result_order is a list of indices with the order implied by the hierarhical tree
+        """ Sort a matrix of predictions by similarity.
 
-        sorted_similarity transforms a distance matrix into a sorted distance matrix according to
-        the order implied by the hierarchical tree (dendrogram)
+        Transforms a distance matrix into a sorted distance matrix according to the order implied
+        by the hierarchical tree (dendrogram).
+        Parameters
+        ----------
+        predictions: numpy.ndarray
+            A stacked matrix of vgg_face2 predictions of the shape (`N`, `D`) where `N` is the
+            number of observations and `D` are the number of dimensions.  NB: The given
+            :attr:`predictions` will be overwritten to save memory. If you still require the 
+            original values you should take a copy prior to running this method
+        method: ['single','centroid','median','ward']
+            The clustering method to use.
+        Returns
+        -------
+        list:
+            List of indices with the order implied by the hierarchical tree
         """
         logger.info("Sorting face distances. Depending on your dataset this may take some time...")
-        num_predictions = predictions.shape[0]
-        result_linkage = linkage(predictions, method=method, preserve_input=False)
-        result_order = self.seriation(result_linkage, num_predictions, num_predictions * 2 - 2)
+        num_predictions, dims = predictions.shape
+
+        kwargs = dict(method=method)
+        if self._use_vector_linkage(num_predictions, dims):
+            func = linkage_vector
+        else:
+            kwargs["preserve_input"] = False
+            func = linkage
+
+        result_linkage = func(predictions, **kwargs)
+        result_order = self._seriation(result_linkage,
+                                       num_predictions,
+                                       num_predictions + num_predictions - 2)
         return result_order
 
-    def seriation(self, tree, points, current_index):
-        """ Seriation method for sorted similarity
-            input:
-                - tree is a hierarchical tree (dendrogram)
-                - points is the number of points given to the clustering process
-                - current_index is the position in the tree for the recursive traversal
-            output:
-                - order implied by the hierarchical tree
+    @staticmethod
+    def _use_vector_linkage(item_count, dims):
+        """ Calculate the RAM that will be required to sort these images and select the appropriate
+        clustering method.
+        From fastcluster documentation:
+            "While the linkage method requires Θ(N:sup:`2`) memory for clustering of N points, this
+            [vector] method needs Θ(N D)for N points in RD, which is usually much smaller."
+            also:
+            "half the memory can be saved by specifying :attr:`preserve_input`=``False``"
+        To under calculating we divide the memory calculation by 1.7 instead of 2
+        Parameters
+        ----------
+        item_count: int
+            The number of images that are to be processed
+        dims: int
+            The number of dimensions in the vgg_face output
+        Returns
+        -------
+            bool:
+                ``True`` if vector_linkage should be used. ``False`` if linkage should be used
+        """
+        np_float = 24  # bytes size of a numpy float
+        divider = 1024 * 1024  # bytes to MB
 
-            seriation computes the order implied by a hierarchical tree (dendrogram)
+        free_ram = psutil.virtual_memory().free / divider
+        linkage_required = (((item_count ** 2) * np_float) / 1.8) / divider
+        vector_required = ((item_count * dims) * np_float) / divider
+        logger.debug("free_ram: %sMB, linkage_required: %sMB, vector_required: %sMB",
+                     int(free_ram), int(linkage_required), int(vector_required))
+
+        if linkage_required < free_ram:
+            logger.verbose("Using linkage method")
+            retval = False
+        elif vector_required < free_ram:
+            logger.warning("Not enough RAM to perform linkage clustering. Using vector "
+                           "clustering. This will be significantly slower. Free RAM: %sMB. "
+                           "Required for linkage method: %sMB",
+                           int(free_ram), int(linkage_required))
+            retval = True
+        else:
+            raise FaceswapError("Not enough RAM available to sort faces. Try reducing "
+                                "the size of  your dataset. Free RAM: {}MB. "
+                                "Required RAM: {}MB".format(int(free_ram), int(vector_required)))
+        logger.debug(retval)
+        return retval
+
+    def _seriation(self, tree, points, current_index):
+        """ Seriation method for sorted similarity.
+
+        Seriation computes the order implied by a hierarchical tree (dendrogram).
+
+        Parameters
+        ----------
+        tree: numpy.ndarray
+           A hierarchical tree (dendrogram)
+        points: int
+            The number of points given to the clustering process
+        current_index: int
+            The position in the tree for the recursive traversal
+        Returns
+        -------
+        list:
+            The indices in the order implied by the hierarchical tree
         """
         if current_index < points:
             return [current_index]
         left = int(tree[current_index-points, 0])
         right = int(tree[current_index-points, 1])
-        return self.seriation(tree, points, left) + self.seriation(tree, points, right)
+        return self._seriation(tree, points, left) + self._seriation(tree, points, right)

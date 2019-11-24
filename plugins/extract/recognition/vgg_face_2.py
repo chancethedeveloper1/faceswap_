@@ -1,11 +1,5 @@
 #!/usr/bin python3
-""" VGG_Face2 inference
-Model exported from: https://github.com/WeidiXie/Keras-VGGFace2-ResNet50
-which is based on: https://www.robots.ox.ac.uk/~vgg/software/vgg_face/
-
-Licensed under Creative Commons Attribution License.
-https://creativecommons.org/licenses/by-nc/4.0/
-"""
+""" VGG_Face2 recognition model """
 
 import numpy as np
 from lib.model.session import KSession
@@ -15,7 +9,23 @@ from ._base import Recognizer, logger
 
 class Recognition(Recognizer):
     """ VGG Face feature extraction.
-        Input images should be in BGR Order """
+
+    Extracts feature vectors from faces in order to compare similarity.
+    Parameters
+    ----------
+    backend: ['GPU', 'CPU']
+        Whether to run inference on a GPU or on the CPU
+    loglevel: ['INFO', 'VERBODE', 'DEBUG', 'TRACE']
+        The system log level
+    Notes
+    -----
+    Input images should be in BGR Order
+    Model exported from: https://github.com/WeidiXie/Keras-VGGFace2-ResNet50 which is based on:
+    https://www.robots.ox.ac.uk/~vgg/software/vgg_face/
+    Licensed under Creative Commons Attribution License.
+    https://creativecommons.org/licenses/by-nc/4.0/
+    """
+    
     def __init__(self, **kwargs):
         git_model_id = 10
         model_filename = "vggface2_resnet50_v2.h5"
@@ -58,7 +68,17 @@ class Recognition(Recognizer):
         return processed_batch
 
     def predict(self, image_batch):
-        """ Run model to get predictions """
+        """ Return encodings for given image from vgg_face2.
+
+        Parameters
+        ----------
+        face: numpy.ndarray
+            The face to be fed through the predictor. Should be in BGR channel order
+        Returns
+        -------
+        numpy.ndarray
+            The encodings for the face
+        """
         logger.debug("Predicting face encoding")
         predictions = self.model.predict(image_batch)[0, :]
         return predictions
