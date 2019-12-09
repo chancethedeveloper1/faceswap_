@@ -96,6 +96,12 @@ def read_image_batch(filenames):
     Leverages multi-threading to load multiple images from disk at the same time
     leading to vastly reduced image read times.
 
+    Notes
+    -----
+    Images are loaded concurrently, so the order of the returned batch will likely not be the same
+    as the order of the input filenames. Filenames are returned with the batch in the correct order
+    corresponding to the returned batch.
+
     Parameters
     ----------
     filenames: list
@@ -103,6 +109,8 @@ def read_image_batch(filenames):
 
     Returns
     -------
+    list
+        Filenames in the correct order as they are returned
     numpy.ndarray
         The batch of images in `BGR` channel order.
 
@@ -113,16 +121,21 @@ def read_image_batch(filenames):
     Example
     -------
     >>> image_filenames = ["/path/to/image_1.png", "/path/to/image_2.png", "/path/to/image_3.png"]
-    >>> images = read_image_batch(image_filenames)
+    >>> filenames, images = read_image_batch(image_filenames)
     """
     logger.trace("Requested batch: '%s'", filenames)
     executor = futures.ThreadPoolExecutor()
     with executor:
-        images = [executor.submit(read_image, filename, raise_error=True)
-                  for filename in filenames]
-        batch = np.array([future.result() for future in futures.as_completed(images)])
-    logger.trace("Returning images: %s", batch.shape)
-    return batch
+        images = {executor.submit(read_image, filename, raise_error=True): filename
+                  for filename in filenames}
+        batch = []
+        filenames = []
+        for future in futures.as_completed(images):
+            batch.append(future.result())
+            filenames.append(images[future])
+        batch = np.array(batch)
+    logger.trace("Returning images: (filenames: %s, batch shape: %s)", filenames, batch.shape)
+    return filenames, batch
 
 
 def read_image_hash(filename):
@@ -164,8 +177,6 @@ def read_image_hash_batch(filenames):
     ----------
     filenames: list
         A list of ``str`` full paths to the images to be loaded.
-    show_progress: bool, optional
-        Display a progress bar. Default: False
 
     Yields
     -------
@@ -179,8 +190,10 @@ def read_image_hash_batch(filenames):
     logger.trace("Requested batch: '%s'", filenames)
     executor = futures.ThreadPoolExecutor()
     with executor:
+        logger.debug("Submitting %s items to executor", len(filenames))
         read_hashes = {executor.submit(read_image_hash, filename): filename
                        for filename in filenames}
+        logger.debug("Succesfully submitted %s items to executor", len(filenames))
         for future in futures.as_completed(read_hashes):
             retval = (read_hashes[future], future.result())
             logger.trace("Yielding: %s", retval)
@@ -321,7 +334,7 @@ def count_frames(filename, fast=False):
             logger.debug("frame line: %s", output)
             if not init_tqdm:
                 logger.debug("Initializing tqdm")
-                pbar = tqdm(desc="Counting Video Frames", total=duration, unit="secs")
+                pbar = tqdm(desc="Counting Video Frames", leave=False, total=duration, unit="secs")
                 init_tqdm = True
             time_idx = output.find("time=") + len("time=")
             frame_idx = output.find("frame=") + len("frame=")
@@ -554,7 +567,7 @@ class ImagesLoader(ImageIO):
         """
         if self._is_video:
             self._count = int(count_frames(self.location, fast=fast_count))
-            self._file_list = [self._dummy_video_framename(i + 1) for i in range(self.count)]
+            self._file_list = [self._dummy_video_framename(i) for i in range(self.count)]
         else:
             if isinstance(self.location, (list, tuple)):
                 self._file_list = self.location
@@ -607,24 +620,29 @@ class ImagesLoader(ImageIO):
                 continue
             # Convert to BGR for cv2 compatibility
             frame = frame[:, :, ::-1]
-            filename = self._dummy_video_framename(idx + 1)
+            filename = self._dummy_video_framename(idx)
             logger.trace("Loading video frame: '%s'", filename)
             yield filename, frame
         reader.close()
 
-    def _dummy_video_framename(self, frame_no):
+    def _dummy_video_framename(self, index):
         """ Return a dummy filename for video files
 
         Parameters
         ----------
-        frame_no: int
-            The frame number for the video frame
+        index: int
+            The index number for the frame in the video file
+
+        Notes
+        -----
+        Indexes start at 0, frame numbers start at 1, so index is incremented by 1
+        when creating the filename
 
         Returns
         -------
         str: A dummied filename for a video frame """
         vidname = os.path.splitext(os.path.basename(self.location))[0]
-        return "{}_{:06d}.png".format(vidname, frame_no + 1)
+        return "{}_{:06d}.png".format(vidname, index + 1)
 
     def _from_folder(self):
         """ Generator for loading images from a folder
