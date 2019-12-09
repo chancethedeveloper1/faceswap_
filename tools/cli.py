@@ -32,7 +32,7 @@ class AlignmentsArgs(FaceSwapArgs):
             "opts": ("-j", "--job"),
             "action": Radio,
             "type": str,
-            "choices": ("dfl", "draw", "extract", "manual", "merge", "missing-alignments",
+            "choices": ("dfl", "draw", "extract", "fix", "manual", "merge", "missing-alignments",
                         "missing-frames", "leftover-faces", "multi-faces", "no-faces",
                         "remove-faces", "remove-frames", "rename", "sort", "spatial",
                         "update-hashes"),
@@ -49,6 +49,11 @@ class AlignmentsArgs(FaceSwapArgs):
                     "alignment data. This is a lot quicker than re-detecting faces. Can pass in "
                     "the '-een' (--extract-every-n) parameter to only extract every nth frame." +
                     frames_and_faces_dir + align_eyes +
+                    # TODO - Remove the fix job after a period of time. Implemented 2019/12/07
+                    "\nL|'fix': There was a bug when extracting from video which would shift all "
+                    "the faces out by 1 frame. This was a shortlived bug, but this job will fix "
+                    "alignments files that have this issue. NB: Only run this on alignments files "
+                    "that you know need fixing."
                     "\nL|'manual': Manually view and edit landmarks." + frames_dir +
                     "\nL|'merge': Merge multiple alignment files into one. Specify a space "
                     "separated list of alignments files with the -a flag. Optionally specify a "
@@ -207,7 +212,7 @@ class PreviewArgs(FaceSwapArgs):
                               "default": False,
                               "backend": "nvidia",
                               "help": "Sets allow_growth option of Tensorflow to spare memory "
-                              "on some configurations."})
+                                      "on some configurations."})
 
         return argument_list
 
@@ -462,6 +467,7 @@ class MaskArgs(FaceSwapArgs):
             "action": DirOrFileFullPaths,
             "type": str,
             "group": "data",
+            "filetypes": "video",
             "required": True,
             "help": "Directory containing extracted faces, source frames, or a video file."})
         argument_list.append({
@@ -547,6 +553,24 @@ class MaskArgs(FaceSwapArgs):
             "help": "Helps reduce 'blotchiness' on some masks by making light shades white "
                     "and dark shades black. Higher values will impact more of the mask. NB: "
                     "Only effects the output preview. Set to 0 for off"})
+        argument_list.append({
+            "opts": ("-ot", "--output-type"),
+            "action": Radio,
+            "type": str.lower,
+            "choices": ("combined", "masked", "mask"),
+            "default": "combined",
+            "group": "output",
+            "help": "R|How to format the output when processing is set to 'output'."
+                    "\nL|combined: The image contains the face/frame, face mask and masked face."
+                    "\nL|masked: Output the face/frame as rgba image with the face masked."
+                    "\nL|mask: Only output the mask as a single channel image."})
+        argument_list.append({
+            "opts": ("-f", "--full-frame"),
+            "action": "store_true",
+            "default": False,
+            "group": "output",
+            "help": "R|Whether to output the whole frame or only the face box when using "
+                    "output processing. Only has an effect when using frames as input."})
 
         return argument_list
 
@@ -602,7 +626,8 @@ class SortArgs(FaceSwapArgs):
                               "action": Radio,
                               "type": str,
                               "choices": ("blur", "face", "face-cnn", "face-cnn-dissim",
-                                          "face-yaw", "hist", "hist-dissim"),
+                                          "face-yaw", "hist", "hist-dissim", "color-gray",
+                                          "color-luma", "color-green", "color-orange"),
                               "dest": 'sort_method',
                               "group": "sort settings",
                               "default": "face",
@@ -623,8 +648,18 @@ class SortArgs(FaceSwapArgs):
                                       "\nL|'hist': Sort faces by their color histogram. You can "
                                       "adjust the threshold with the '-t' (--ref_threshold) "
                                       "option."
-                                      "\nL|'hist-dissim': Like 'hist' but sorts by "
-                                      "dissimilarity."
+                                      "\nL|'hist-dissim': Like 'hist' but sorts by dissimilarity."
+                                      "\nL|'color-gray': Sort images by the average intensity of "
+                                      "the converted grayscale color channel."
+                                      "\nL|'color-luma': Sort images by the average intensity of "
+                                      "the converted Y color channel. Bright lighting and "
+                                      "oversaturated images will be ranked first."
+                                      "\nL|'color-green': Sort images by the average intensity of "
+                                      "the converted Cg color channel. Green images will be "
+                                      "ranked first and red images will be last."
+                                      "\nL|'color-orange': Sort images by the average intensity "
+                                      "of the converted Co color channel. Orange images will be "
+                                      "ranked first and blue images will be last."
                                       "\nDefault: hist"})
         argument_list.append({"opts": ('-k', '--keep'),
                               "action": 'store_true',

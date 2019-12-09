@@ -7,8 +7,9 @@ import sys
 import cv2
 import numpy as np
 
+from lib.faces_detect import DetectedFace
 from lib.queue_manager import queue_manager
-from plugins.extract.pipeline import Extractor
+from plugins.extract.pipeline import Extractor, ExtractMedia
 from . import Annotate, ExtractedFaces, Frames
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -478,18 +479,21 @@ class Manual():
 
         frame, faces = self.get_frame()
         press = self.get_keys()
+        self.interface.set_redraw(True)
 
         while True:
-            self.help.render()
-            cv2.imshow("Frame", frame)
-            cv2.imshow("Faces", faces)
-            key = cv2.waitKey(1)
+            if self.interface.redraw():
+                self.help.render()
+                cv2.imshow("Frame", frame)
+                cv2.imshow("Faces", faces)
+                self.interface.set_redraw(False)
+            key = cv2.waitKey(1000)
 
             if self.window_closed(is_windows, is_conda, key):
                 queue_manager.terminate_queues()
                 break
 
-            if key:
+            if key and key != -1:
                 logger.trace("Keypress received: '%s'", key)
             if key in press.keys():
                 action = press[key]["action"]
@@ -508,7 +512,6 @@ class Manual():
 
             logger.trace("Redraw requested")
             frame, faces = self.get_frame()
-            self.interface.set_redraw(False)
 
         cv2.destroyAllWindows()
 
@@ -583,23 +586,18 @@ class Manual():
         while True:
             if navigation["last_request"] == 0:
                 break
-            elif navigation["frame_idx"] in (0, navigation["max_frame"]):
+            if navigation["frame_idx"] in (0, navigation["max_frame"]):
                 break
-            elif skip_mode == "standard":
+            if skip_mode == "standard":
                 break
-            elif (skip_mode == "no faces"
-                  and not self.alignments.frame_has_faces(frame)):
+            if skip_mode == "no faces" and not self.alignments.frame_has_faces(frame):
                 break
-            elif (skip_mode == "multi-faces"
-                  and self.alignments.frame_has_multiple_faces(frame)):
+            if skip_mode == "multi-faces" and self.alignments.frame_has_multiple_faces(frame):
                 break
-            elif (skip_mode == "has faces"
-                  and self.alignments.frame_has_faces(frame)):
+            if skip_mode == "has faces" and self.alignments.frame_has_faces(frame):
                 break
-            else:
-                self.interface.iterate_frame("navigation",
-                                             navigation["last_request"])
-                frame = frame_list[navigation["frame_idx"]]["frame_fullname"]
+            self.interface.iterate_frame("navigation", navigation["last_request"])
+            frame = frame_list[navigation["frame_idx"]]["frame_fullname"]
 
         image = self.frames.load_image(frame)
         navigation["last_request"] = 0
@@ -720,7 +718,7 @@ class FacesDisplay():
     def build_faces_image(self, size):
         """ Display associated faces """
         total_faces = len(self.faces)
-        logger.trace("Building faces panel. (total_faces: %s", total_faces)
+        logger.trace("Building faces panel. (total_faces: %s)", total_faces)
         if not total_faces:
             logger.trace("Returning empty row")
             image = self.build_faces_row(list(), size)
@@ -781,11 +779,10 @@ class MouseHandler():
     def init_extractor(self):
         """ Initialize Aligner """
         logger.debug("Initialize Extractor")
-        extractor = Extractor("manual", "fan", None, multiprocess=True, normalize_method="hist")
+        extractor = Extractor(None, "fan", None, multiprocess=True, normalize_method="hist")
         self.queues["in"] = extractor.input_queue
-        # Set the batchsizes to 1
-        for plugin_type in ("detect", "align"):
-            extractor.set_batchsize(plugin_type, 1)
+        # Set the batchsize to 1
+        extractor.set_batchsize("align", 1)
         extractor.launch()
         logger.debug("Initialized Extractor")
         return extractor
@@ -829,8 +826,8 @@ class MouseHandler():
         self.center = None
         self.last_move = None
         self.mouse_state = None
-        self.media["bounding_box"] = list()
-        self.media["bounding_box_orig"] = list()
+        self.media["bounding_box"] = DetectedFace()
+        self.media["bounding_box_orig"] = None
 
     def set_bounding_box(self, pt_x, pt_y):
         """ Select or create bounding box """
@@ -882,10 +879,10 @@ class MouseHandler():
         pt_x, pt_y = self.center
         width, height = self.dims
         scale = self.interface.get_frame_scaling()
-        self.media["bounding_box"] = [int((pt_x / scale) - width / 2),
-                                      int((pt_y / scale) - height / 2),
-                                      int((pt_x / scale) + width / 2),
-                                      int((pt_y / scale) + height / 2)]
+        self.media["bounding_box"].x = int((pt_x / scale) - width / 2)
+        self.media["bounding_box"].y = int((pt_y / scale) - height / 2)
+        self.media["bounding_box"].w = width
+        self.media["bounding_box"].h = height
 
     def move_bounding_box(self, pt_x, pt_y):
         """ Move the bounding box """
@@ -896,7 +893,6 @@ class MouseHandler():
     def resize_bounding_box(self, pt_x, pt_y):
         """ Resize the bounding box """
         scale = self.interface.get_frame_scaling()
-
         if not self.last_move:
             self.last_move = (pt_x, pt_y)
             self.media["bounding_box_orig"] = self.media["bounding_box"]
@@ -907,21 +903,22 @@ class MouseHandler():
         original = self.media["bounding_box_orig"]
         updated = self.media["bounding_box"]
 
-        minsize = int(10 / scale)
+        minsize = int(20 / scale)
         center = (int(self.center[0] / scale), int(self.center[1] / scale))
-        updated[0] = min(center[0] - minsize, original[0] - move_x)
-        updated[1] = min(center[1] - minsize, original[1] - move_y)
-        updated[2] = max(center[0] + minsize, original[2] + move_x)
-        updated[3] = max(center[1] + minsize, original[3] + move_y)
+        updated.x = min(center[0] - (minsize // 2), original.x - move_x)
+        updated.y = min(center[1] - (minsize // 2), original.y - move_y)
+        updated.w = max(minsize, original.w + move_x)
+        updated.h = max(minsize, original.h + move_y)
         self.update_landmarks()
         self.last_move = (pt_x, pt_y)
 
     def update_landmarks(self):
         """ Update the landmarks """
-        self.queues["in"].put({"image": self.media["image"],
-                               "filename": self.media["frame_id"],
-                               "manual_face": self.media["bounding_box"]})
-        detected_face = next(self.extractor.detected_faces())["detected_faces"][0]
+        feed = ExtractMedia(self.media["frame_id"],
+                            self.media["image"],
+                            detected_faces=[self.media["bounding_box"]])
+        self.queues["in"].put(feed)
+        detected_face = next(self.extractor.detected_faces()).detected_faces[0]
         alignment = detected_face.to_alignment()
         # Mask will now be incorrect for updated landmarks so delete
         alignment["mask"] = dict()

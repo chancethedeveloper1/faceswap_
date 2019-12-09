@@ -321,7 +321,7 @@ def count_frames(filename, fast=False):
             logger.debug("frame line: %s", output)
             if not init_tqdm:
                 logger.debug("Initializing tqdm")
-                pbar = tqdm(desc="Counting Video Frames", total=duration, unit="secs")
+                pbar = tqdm(desc="Counting Video Frames", leave=False, total=duration, unit="secs")
                 init_tqdm = True
             time_idx = output.find("time=") + len("time=")
             frame_idx = output.find("frame=") + len("frame=")
@@ -393,13 +393,15 @@ class ImageIO():
 
     def _set_thread(self):
         """ Set the load/save thread """
-        if self._thread is not None:
+        logger.debug("Setting thread")
+        if self._thread is not None and self._thread.is_alive():
+            logger.debug("Thread pre-exists and is alive: %s", self._thread)
             return
         self._thread = MultiThread(self._process,
                                    self._queue,
                                    name=self.__class__.__name__,
                                    thread_count=1)
-        logger.trace(self._thread)
+        logger.debug("Set thread: %s", self._thread)
         self._thread.start()
 
     def _process(self, queue):
@@ -415,7 +417,8 @@ class ImageIO():
     def close(self):
         """ Closes down and joins the internal threads """
         logger.debug("Received Close")
-        self._thread.join()
+        if self._thread is not None:
+            self._thread.join()
         logger.debug("Closed")
 
 
@@ -464,8 +467,8 @@ class ImagesLoader(ImageIO):
 
     def __init__(self, path, queue_size=8, load_with_hash=False, fast_count=True, skip_list=None):
         logger.debug("Initializing %s: (path: %s, queue_size: %s, load_with_hash: %s, "
-                     "fast_count: %s)", self.__class__.__name__, path, queue_size,
-                     load_with_hash, fast_count)
+                     "fast_count: %s, skip_list: %s)", self.__class__.__name__, path, queue_size,
+                     load_with_hash, fast_count, skip_list)
 
         args = (load_with_hash, )
         super().__init__(path, queue_size=queue_size, args=args)
@@ -551,7 +554,7 @@ class ImagesLoader(ImageIO):
         """
         if self._is_video:
             self._count = int(count_frames(self.location, fast=fast_count))
-            self._file_list = [self._dummy_video_framename(i + 1) for i in range(self.count)]
+            self._file_list = [self._dummy_video_framename(i) for i in range(self.count)]
         else:
             if isinstance(self.location, (list, tuple)):
                 self._file_list = self.location
@@ -577,7 +580,7 @@ class ImagesLoader(ImageIO):
         for retval in iterator():
             filename, image = retval[:2]
             if image is None or (not image.any() and image.ndim not in (2, 3)):
-                # All black frames will return not np.any() so check dims too
+                # All black frames will return not numpy.any() so check dims too
                 logger.warning("Unable to open image. Skipping: '%s'", filename)
                 continue
             logger.trace("Putting to queue: %s", [v.shape if isinstance(v, np.ndarray) else v
@@ -600,28 +603,33 @@ class ImagesLoader(ImageIO):
         reader = imageio.get_reader(self.location, "ffmpeg")
         for idx, frame in enumerate(reader):
             if idx in self._skip_list:
-                logger.trace("Skipping frame %s due to skip list")
+                logger.trace("Skipping frame %s due to skip list", idx)
                 continue
             # Convert to BGR for cv2 compatibility
             frame = frame[:, :, ::-1]
-            filename = self._dummy_video_framename(idx + 1)
+            filename = self._dummy_video_framename(idx)
             logger.trace("Loading video frame: '%s'", filename)
             yield filename, frame
         reader.close()
 
-    def _dummy_video_framename(self, frame_no):
+    def _dummy_video_framename(self, index):
         """ Return a dummy filename for video files
 
         Parameters
         ----------
-        frame_no: int
-            The frame number for the video frame
+        index: int
+            The index number for the frame in the video file
+
+        Notes
+        -----
+        Indexes start at 0, frame numbers start at 1, so index is incremented by 1
+        when creating the filename
 
         Returns
         -------
         str: A dummied filename for a video frame """
         vidname = os.path.splitext(os.path.basename(self.location))[0]
-        return "{}_{:06d}.png".format(vidname, frame_no + 1)
+        return "{}_{:06d}.png".format(vidname, index + 1)
 
     def _from_folder(self):
         """ Generator for loading images from a folder
@@ -670,6 +678,7 @@ class ImagesLoader(ImageIO):
             initialized with :attr:`load_with_hash` set to ``True`` and the :attr:`location`
             is a folder of images.
         """
+        logger.debug("Initializing Load Generator")
         self._set_thread()
         while True:
             self._thread.check_and_raise_error()
@@ -683,6 +692,7 @@ class ImagesLoader(ImageIO):
             logger.trace("Yielding: %s", [v.shape if isinstance(v, np.ndarray) else v
                                           for v in retval])
             yield retval
+        logger.debug("Closing Load Generator")
         self._thread.join()
 
 
@@ -712,7 +722,7 @@ class ImagesSaver(ImageIO):
     """
 
     def __init__(self, path, queue_size=8, as_bytes=False):
-        logger.debug("Initializing %s: (path: %s, load_with_hash: %s, as_bytes: %s)",
+        logger.debug("Initializing %s: (path: %s, queue_size: %s, as_bytes: %s)",
                      self.__class__.__name__, path, queue_size, as_bytes)
 
         super().__init__(path, queue_size=queue_size)
@@ -757,12 +767,12 @@ class ImagesSaver(ImageIO):
         Parameters
         ----------
         filename: str
-            The filename of the image to be saved. Can include or exclude the folder location.
+            The filename of the image to be saved. NB: Any folders passed in with the filename
+            will be stripped and replaced with :attr:`location`.
         image: numpy.ndarray
             The image to be saved
         """
-        if not os.path.commonprefix([self.location, filename]):
-            filename = os.path.join(self.location, filename)
+        filename = os.path.join(self.location, os.path.basename(filename))
         try:
             if self._as_bytes:
                 with open(filename, "wb") as out_file:

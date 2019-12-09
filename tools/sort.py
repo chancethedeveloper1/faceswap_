@@ -6,21 +6,20 @@ import logging
 import os
 import sys
 import operator
+from concurrent import futures
 from shutil import copyfile
 
 import numpy as np
 import cv2
 from tqdm import tqdm
-from concurrent import futures
 
 # faceswap imports
 from lib.cli import FullHelpArgumentParser
 from lib.serializer import get_serializer_from_filename
 from lib.faces_detect import DetectedFace
 from lib.image import read_image
-from lib.queue_manager import queue_manager
 from lib.vgg_face2_keras import VGGFace2 as VGGFace
-from plugins.plugin_loader import PluginLoader
+from plugins.extract.pipeline import Extractor, ExtractMedia
 
 from . import cli
 
@@ -76,6 +75,9 @@ class Sort():
         _sort = "sort_" + self.args.sort_method.lower()
         _group = "group_" + self.args.group_method.lower()
         _final = "final_process_" + self.args.final_process.lower()
+        if _sort.startswith('sort_color-'):
+            self.args.color_method = _sort.replace('sort_color-', '')
+            _sort = _sort[:10]
         self.args.sort_method = _sort.replace('-', '_')
         self.args.group_method = _group.replace('-', '_')
         self.args.final_process = _final.replace('-', '_')
@@ -85,66 +87,31 @@ class Sort():
     @staticmethod
     def launch_aligner():
         """ Load the aligner plugin to retrieve landmarks """
-        for plugin in ("fan", "cv2_dnn"):
-            aligner = PluginLoader.get_aligner(plugin)(loglevel=self.args.loglevel)
-            process = SpawnProcess(aligner.run, **kwargs)
-            event = process.event
-            process.start()
-            # Wait for Aligner to take init
-            # The first ever load of the model for FAN has reportedly taken
-            # up to 3-4 minutes, hence high timeout.
-            event.wait(300)
-
-            if not event.is_set():
-                if plugin == "fan":
-                    process.join()
-                    logger.error("Error initializing FAN. Trying CV2-DNN")
-                    continue
-                else:
-                    raise ValueError("Error inititalizing Aligner")
-            if plugin == "cv2_dnn":
-                return
-
-            try:
-                err = None
-                err = out_queue.get(True, 1)
-            except QueueEmpty:
-                pass
-            if not err:
-                break
-            process.join()
-            logger.error("Error initializing FAN. Trying CV2-DNN")
-        kwargs = dict(in_queue=queue_manager.get_queue("in"),
-                      out_queue=queue_manager.get_queue("out"),
-                      queue_size=8)
-        aligner = PluginLoader.get_aligner("fan")(normalize_method="hist")
-        aligner.batchsize = 1  # TODO Put batches at a time or load from alignment file
-        aligner.initialize(**kwargs)
-        aligner.start()
+        extractor = Extractor(None, "fan", None, normalize_method="hist")
+        extractor.set_batchsize("align", 1)
+        extractor.launch()
+        return extractor
 
     @staticmethod
     def alignment_dict(filename, image):
-        """ Set the image to a dict for alignment """
+        """ Set the image to an ExtractMedia object for alignment """
         height, width = image.shape[:2]
         face = DetectedFace(x=0, w=width, y=0, h=height)
-        face = face.to_bounding_box_dict()
-        return {"image": image,
-                "filename": filename,
-                "detected_faces": [face]}
+        return ExtractMedia(filename, image, detected_faces=[face])
 
     def _get_landmarks(self):
         """ Multi-threaded, parallel and sequentially ordered landmark loader """
-        self.launch_aligner()
+        extractor = self.launch_aligner()
         filename_list, image_list = self._get_images()
         feed_list = list(map(Sort.alignment_dict, filename_list, image_list))
         landmarks = np.zeros((len(feed_list), 68, 2), dtype='float32')
 
         logger.info("Finding landmarks in images...")
-        for feed in tqdm(feed_list, desc="Putting...", file=sys.stdout):
-            queue_manager.get_queue("in").put(feed)
-        for index, _ in enumerate(tqdm(landmarks, desc="Aligning...", file=sys.stdout)):
-            face = queue_manager.get_queue("out").get()
-            landmarks[index] = np.array(face["detected_faces"][0].landmarks_xy)
+        # TODO thread the put to queue so we don't have to put and get at the same time
+        # Or even better, set up a proper background loader from disk (i.e. use lib.image.ImageIO)
+        for idx, feed in enumerate(tqdm(feed_list, desc="Aligning...", file=sys.stdout)):
+            extractor.input_queue.put(feed)
+            landmarks[idx] = next(extractor.detected_faces()).detected_faces[0].landmarks_xy
 
         return filename_list, image_list, landmarks
 
@@ -214,7 +181,7 @@ class Sort():
     def sort_face_cnn(self):
         """ Sort by landmark similarity """
         logger.info("Sorting by landmark similarity...")
-        filename_list, image_list, landmarks = self._get_landmarks()
+        filename_list, _, landmarks = self._get_landmarks()
         img_list = list(zip(filename_list, landmarks))
 
         logger.info("Comparing landmarks and sorting...")
@@ -235,7 +202,7 @@ class Sort():
     def sort_face_cnn_dissim(self):
         """ Sort by landmark dissimilarity """
         logger.info("Sorting by landmark dissimilarity...")
-        filename_list, image_list, landmarks = self._get_landmarks()
+        filename_list, _, landmarks = self._get_landmarks()
         scores = np.zeros(len(filename_list), dtype='float32')
         img_list = list(list(items) for items in zip(filename_list, landmarks, scores))
 
@@ -258,7 +225,7 @@ class Sort():
     def sort_face_yaw(self):
         """ Sort by estimated face yaw angle """
         logger.info("Sorting by estimated face yaw angle..")
-        filename_list, image_list, landmarks = self._get_landmarks()
+        filename_list, _, landmarks = self._get_landmarks()
 
         logger.info("Estimating yaw...")
         yaws = [self.calc_landmarks_face_yaw(mark) for mark in landmarks]
@@ -315,6 +282,31 @@ class Sort():
         logger.info("Sorting...")
         img_list = sorted(img_list, key=operator.itemgetter(2), reverse=True)
         return img_list
+
+    def sort_color(self):
+        """ Score by channel average intensity """
+        logger.info("Sorting by channel average intensity...")
+        desired_channel = {'gray': 0, 'luma': 0, 'orange': 1, 'green': 2}
+        method = self.args.color_method
+        channel_to_sort = next(v for (k, v) in desired_channel.items() if method.endswith(k))
+        filename_list, image_list = self._get_images()
+
+        logger.info("Converting to appropriate colorspace...")
+        same_size = all(img.size == image_list[0].size for img in image_list)
+        images = np.array(image_list, dtype='float32')[None, ...] if same_size else image_list
+        converted_images = self._convert_color(images, same_size, method)
+
+        logger.info("Scoring each image...")
+        if same_size:
+            scores = np.average(converted_images[0], axis=(1, 2))
+        else:
+            progress_bar = tqdm(converted_images, desc="Scoring", file=sys.stdout)
+            scores = np.array([np.average(image, axis=(0, 1)) for image in progress_bar])
+
+        logger.info("Sorting...")
+        matched_list = list(zip(filename_list, scores[:, channel_to_sort]))
+        sorted_file_img_list = sorted(matched_list, key=operator.itemgetter(1), reverse=True)
+        return sorted_file_img_list
 
     # Methods for grouping
     def group_blur(self, img_list):
@@ -544,7 +536,6 @@ class Sort():
         :return: img_list but with the comparative values that the chosen
         grouping method expects.
         """
-        input_dir = self.args.input_dir
         logger.info("Preparing to group...")
         if group_method == 'group_blur':
             filename_list, image_list = self._get_images()
@@ -565,6 +556,27 @@ class Sort():
             raise ValueError("{} group_method not found.".format(group_method))
 
         return self.splice_lists(img_list, temp_list)
+
+    @staticmethod
+    def _convert_color(imgs, same_size, method):
+        """ Helper function to convert colorspaces """
+
+        if method.endswith('gray'):
+            conversion = np.array([[0.0722], [0.7152], [0.2126]])
+        else:
+            conversion = np.array([[0.25, 0.5, 0.25], [-0.5, 0.0, 0.5], [-0.25, 0.5, -0.25]])
+
+        if same_size:
+            path = 'greedy'
+            operation = 'bijk, kl -> bijl' if method.endswith('gray') else 'bijl, kl -> bijk'
+        else:
+            operation = 'ijk, kl -> ijl' if method.endswith('gray') else 'ijl, kl -> ijk'
+            path = np.einsum_path(operation, imgs[0][..., :3], conversion, optimize='optimal')[0]
+
+        progress_bar = tqdm(imgs, desc="Converting", file=sys.stdout)
+        images = [np.einsum(operation, img[..., :3], conversion, optimize=path).astype('float32')
+                  for img in progress_bar]
+        return images
 
     @staticmethod
     def splice_lists(sorted_list, new_vals_list):
