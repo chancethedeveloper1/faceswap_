@@ -62,6 +62,7 @@ class Extract():
                                     rotate_images=self._args.rotate_images,
                                     min_size=self._args.min_size,
                                     normalize_method=normalization)
+        self._face_verification = self._run_verification()
         self._threads = list()
         self._verify_output = False
         logger.debug("Initialized %s", self.__class__.__name__)
@@ -244,10 +245,34 @@ class Extract():
         size: int
             The size that the aligned face should be created at
         """
-
+        desired_faces = list()
         for face in extract_media.detected_faces:
             face.load_aligned(extract_media.image, size=size)
+            desired_faces = self._verify_faces(face, extract_media, desired_faces)
+        extract_media.detected_faces = desired_faces
 
+        self._post_process.do_actions(extract_media)
+        extract_media.remove_image()
+
+        faces_count = len(extract_media.detected_faces)
+        if faces_count == 0:
+            logger.verbose("No faces were detected in image: %s",
+                           os.path.basename(extract_media.filename))
+
+        if not self._verify_output and faces_count > 1:
+            self._verify_output = True
+
+    def _setup_verification(self):
+        """ Determine if facial verification is needed
+
+        Set the :class:`~lib.face_filter.FilterFunc` according to the user supplied filter images
+        in the case that facial recognition is requested.
+
+        Returns
+        -------
+        face_filter: :class:`~lib.face_filter.FilterFunc`
+            Object which can be accessed to verify facial similarity to the chosen filters
+        """
         filter_list = []
         for filter_op in ["filter", "nfilter"]:
             filter_files = getattr(self._args, filter_op, list())
@@ -267,27 +292,39 @@ class Extract():
                                      exclude_filter,
                                      self._extractor,
                                      self._args.ref_threshold)
-            desired_faces = list()
-            for face in faces["detected_faces"]:
-                face.load_feed_face(faces["image"], size=224, coverage_ratio=1.0)
-                if face_filter.check(face.feed_face):
-                    message = "accepted"
-                    desired_faces.append(face)
-                else:
-                    message = "rejected"
-                logger.verbose("Recognized face %s: Frame: %s", message, output_item["filename"])
-            faces["detected_faces"] = desired_faces
+        else:
+            face_filter = None
+        return face_filter
 
-        self._post_process.do_actions(extract_media)
-        extract_media.remove_image()
+    def _verify_faces(self, face, extract_media, desired_faces):
+        """ Output faces to save thread
 
-        faces_count = len(extract_media.detected_faces)
-        if faces_count == 0:
-            logger.verbose("No faces were detected in image: %s",
-                           os.path.basename(extract_media.filename))
+        Set the face filename based on the frame name and put the face to the
+        :class:`~lib.image.ImagesSaver` save queue and add the face information to the alignments
+        data.
 
-        if not self._verify_output and faces_count > 1:
-            self._verify_output = True
+        Parameters
+        ----------
+        face: :class:`~lib.faces_detect.DetectedFace` 
+            Objects present in the :class:`~plugins.extract.pipeline.ExtractMedia` :attr:`image`.
+        extract_media: :class:`~plugins.extract.pipeline.ExtractMedia`
+            The output from :class:`~plugins.extract.Pipeline.Extractor`
+        desired_faces: list
+            A list of :class:`~lib.faces_detect.DetectedFace` objects
+
+        Returns
+        -------
+        desired_faces: list
+            A list of :class:`~lib.faces_detect.DetectedFace` objects
+        """
+        face.load_feed_face(extract_media.image, size=224, coverage_ratio=1.0)
+        if face_filter.check(face.feed_face):
+            msg = "accepted"
+            desired_faces.append(face)
+        else:
+            msg = "rejected"
+        logger.verbose("Face verification...%s: Frame: %s", msg, extract_media.filename)
+        return desired_faces
 
     def _output_faces(self, saver, extract_media):
         """ Output faces to save thread

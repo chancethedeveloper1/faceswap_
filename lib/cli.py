@@ -902,10 +902,9 @@ class ConvertArgs(ExtractConvertArgs):
             "default": None,
             "group": "Face Processing",
             "help": "Identities to avoid: Optionally filter out people who you do not wish to "
-                    "process by passing in an image of that person. Should be a front portrait "
-                    "with a single person in the image. Multiple images can be added space "
-                    "separated. NB: Using face filter will significantly decrease extraction "
-                    "speed and its accuracy cannot be guaranteed."})
+                    "process by passing in an image of that person. Should be a frontal portrait "
+                    "with a single person in the image. Multiple images can be added by "
+                    "separating with a space."})
         argument_list.append({
             "opts": ("-f", "--filter"),
             "action": FilesFullPaths,
@@ -915,10 +914,9 @@ class ConvertArgs(ExtractConvertArgs):
             "default": None,
             "group": "Face Processing",
             "help": "Identities to extract: Optionally select people you wish to process by "
-                    "passing in an image of that person. Should be a front portrait with a "
-                    "single person in the image. Multiple images can be added space separated. "
-                    "NB: Using face filter will significantly decrease extraction speed and its "
-                    "accuracy cannot be guaranteed."})
+                    "passing in an image of that person. Should be a frontal portrait with a "
+                    "single person in the image. Multiple images can be added by separating "
+                    "with a space."})
         argument_list.append({
             "opts": ("-l", "--ref_threshold"),
             "action": Slider,
