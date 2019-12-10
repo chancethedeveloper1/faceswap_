@@ -2,8 +2,6 @@
 
 **Please always attach your generated crash_report.log to any bug report. Failure to attach this report may lead to your issue being closed without response.**
 
-**Please always attach your generated crash_report.log to any bug report**
-
 ## Expected behavior
 
 *Describe, in some detail, what you are trying to do and what the output is that you expect from the program.*
