@@ -105,7 +105,7 @@ class MediaLoader():
                 os.path.isfile(self.folder) and
                 os.path.splitext(self.folder)[1].lower() in _video_extensions):
             logger.verbose("Video exists at: '%s'", self.folder)
-            retval = cv2.VideoCapture(self.folder)  # pylint: disable=no-member
+            retval = cv2.VideoCapture(self.folder)
             # TODO ImageIO single frame seek seems slow. Look into this
             # retval = imageio.get_reader(self.folder, "ffmpeg")
         else:
@@ -151,7 +151,7 @@ class MediaLoader():
         frame = os.path.splitext(filename)[0]
         logger.trace("Loading video frame: '%s'", frame)
         frame_no = int(frame[frame.rfind("_") + 1:]) - 1
-        self.vid_reader.set(cv2.CAP_PROP_POS_FRAMES, frame_no)  # pylint: disable=no-member
+        self.vid_reader.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
         _, image = self.vid_reader.read()
         # TODO imageio single frame seek seems slow. Look into this
         # self.vid_reader.set_image_index(frame_no)
@@ -187,7 +187,7 @@ class MediaLoader():
         output_file = os.path.join(output_folder, filename)
         output_file = os.path.splitext(output_file)[0]+'.png'
         logger.trace("Saving image: '%s'", output_file)
-        cv2.imwrite(output_file, image)  # pylint: disable=no-member
+        cv2.imwrite(output_file, image)
 
 
 class Faces(MediaLoader):
@@ -204,10 +204,11 @@ class Faces(MediaLoader):
                                         total=len(filelist),
                                         desc="Reading Face Hashes"):
             filename = os.path.basename(fullpath)
-            face_name, extension = os.path.splitext(filename)
-            retval = {"face_fullname": filename,
+            face_name, face_extension = os.path.splitext(filename)
+            retval = {"face_filename": filename,
+                      "face_fullpath": fullpath,
                       "face_name": face_name,
-                      "face_extension": extension,
+                      "face_extension": face_extension,
                       "face_hash": face_hash}
             logger.trace(retval)
             yield retval
@@ -241,26 +242,29 @@ class Frames(MediaLoader):
     def process_frames(self):
         """ Process exported Frames """
         logger.info("Loading file list from %s", self.folder)
-        for frame in os.listdir(self.folder):
-            if not self.valid_extension(frame):
-                continue
-            filename = os.path.splitext(frame)[0]
-            file_extension = os.path.splitext(frame)[1]
-
-            retval = {"frame_fullname": frame,
-                      "frame_name": filename,
-                      "frame_extension": file_extension}
+        filelist = [os.path.join(self.folder, frame)
+                    for frame in os.listdir(self.folder)
+                    if self.valid_extension(frame)]
+        for fullpath, frame_hash in tqdm(read_image_hash_batch(filelist),
+                                        total=len(filelist),
+                                        desc="Reading Frame Hashes"):
+            filename = os.path.basename(fullpath)
+            frame_name, extension = os.path.splitext(filename)
+            retval = {"frame_fullname": filename,
+                      "frame_fullpath": fullpath,
+                      "frame_name": frame_name,
+                      "frame_extension": frame_extension,
+                      "frame_hash": frame_hash}
             logger.trace(retval)
             yield retval
 
     def process_video(self):
         """Dummy in frames for video """
         logger.info("Loading video frames from %s", self.folder)
-        vidname = os.path.splitext(os.path.basename(self.folder))[0]
-        for i in range(self.count):
-            idx = i + 1
-            # Keep filename format for outputted face
-            filename = "{}_{:06d}".format(vidname, idx)
+        video_name = os.path.splitext(os.path.basename(self.folder))[0]
+        frame_numbers = range(self.count)
+        for index, _ in enumerate(frame_numbers):
+            filename = "{}_{:06d}".format(video_name, index + 1)
             retval = {"frame_fullname": "{}.png".format(filename),
                       "frame_name": filename,
                       "frame_extension": ".png"}
