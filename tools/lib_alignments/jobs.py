@@ -89,10 +89,11 @@ class Check():
         self.output_message = "Frames with no faces"
         for frame in tqdm(self.items, desc=self.output_message):
             logger.trace(frame)
-            frame_name = frame["frame_fullname"]
-            if not self.alignments.frame_has_faces(frame_name):
-                logger.debug("Returning: '%s'", frame_name)
-                yield frame_name
+            frame_hash = frame["frame_hash"]
+            frame_filename = frame["frame_fullname"]
+            if not self.alignments.frame_has_faces(frame_hash):
+                logger.debug("Returning: '%s'", frame_filename)
+                yield frame_filename, frame_hash
 
     def get_multi_faces(self):
         """ yield each frame or face that has multiple faces
@@ -104,12 +105,13 @@ class Check():
     def get_multi_faces_frames(self):
         """ Return Frames that contain multiple faces """
         self.output_message = "Frames with multiple faces"
-        for item in tqdm(self.items, desc=self.output_message):
-            filename = item["frame_fullname"]
-            if not self.alignments.frame_has_multiple_faces(filename):
-                continue
-            logger.trace("Returning: '%s'", filename)
-            yield filename
+        for frame in tqdm(self.items, desc=self.output_message):
+            logger.trace(frame)
+            frame_hash = frame["frame_hash"]
+            frame_filename = frame["frame_fullname"]
+            if self.alignments.frame_has_multiple_faces(frame_hash):
+                logger.trace("Returning: '%s'", frame_filename)
+                yield frame_filename, frame_hash
 
     def get_multi_faces_faces(self):
         """ Return Faces when there are multiple faces in a frame """
@@ -141,11 +143,12 @@ class Check():
         self.output_message = "Frames missing from alignments file"
         exclude_filetypes = set(["yaml", "yml", "p", "json", "txt"])
         for frame in tqdm(self.items, desc=self.output_message):
-            frame_name = frame["frame_fullname"]
+            frame_hash = frame["frame_hash"]
+            frame_filename = frame["frame_fullname"]
             if (frame["frame_extension"] not in exclude_filetypes
-                    and not self.alignments.frame_exists(frame_name)):
-                logger.debug("Returning: '%s'", frame_name)
-                yield frame_name
+                    and not self.alignments.frame_exists(frame_filename)):
+                logger.debug("Returning: '%s'", frame_filename)
+                yield frame_filename, frame_hash
 
     def get_missing_frames(self):
         """ yield each frame in alignments that does
@@ -161,10 +164,11 @@ class Check():
         """yield each face that isn't in the alignments file."""
         self.output_message = "Faces missing from the alignments file"
         for face in tqdm(self.items, desc=self.output_message):
-            f_hash = face["face_hash"]
-            if f_hash not in self.alignments.hashes_to_frame:
-                logger.debug("Returning: '%s'", face["face_fullname"])
-                yield face["face_fullname"], -1
+            face_hash = face["face_hash"]
+            face_filename = face["face_fullname"]
+            if face_hash not in self.alignments.hashes_to_frame:
+                logger.debug("Returning: '%s'", face_filename)
+                yield face_filename, -1
 
     def output_results(self, items_output):
         """ Output the results in the requested format """
@@ -183,8 +187,7 @@ class Check():
             # Strip the index for printed/file output
             items_output = [item[0] for item in items_output]
         output_message = "-----------------------------------------------\r\n"
-        output_message += " {} ({})\r\n".format(self.output_message,
-                                                len(items_output))
+        output_message += " {} ({})\r\n".format(self.output_message, len(items_output))
         output_message += "-----------------------------------------------\r\n"
         output_message += "\r\n".join([frame for frame in items_output])
         if self.output == "console":
@@ -282,21 +285,16 @@ class Dfl():
             if face["face_extension"] not in (".png", ".jpg"):
                 logger.verbose("'%s' is not a png or jpeg. Skipping", face["face_fullname"])
                 continue
-            f_hash = face["face_hash"]
             fullpath = os.path.join(self.faces.folder, face["face_fullname"])
             dfl = self.get_dfl_alignment(fullpath)
-
-            if not dfl:
-                continue
-
-            self.convert_dfl_alignment(dfl, f_hash, alignments)
+            if dfl:
+                self.convert_dfl_alignment(dfl, face["face_hash"], alignments)
         return alignments
 
     @staticmethod
     def get_dfl_alignment(filename):
         """ Process the alignment of one face """
         ext = os.path.splitext(filename)[1]
-
         if ext.lower() in (".jpg", ".jpeg"):
             img = Image.open(filename)
             try:
