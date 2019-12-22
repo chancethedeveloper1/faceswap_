@@ -219,18 +219,20 @@ class MTCNN():
         """Detects faces in an image, and returns bounding boxes and points for them.
         batch: input batch
         """
-        origin_h, origin_w = batch.shape[1:3]
-        rectangles = self.detect_pnet(batch, origin_h, origin_w)
-        rectangles = self.detect_rnet(batch, rectangles, origin_h, origin_w)
-        rectangles = self.detect_onet(batch, rectangles, origin_h, origin_w)
+        height, width = batch.shape[1:3]
+        if self._pnet_scales is None:
+            self._pnet_scales = calculate_scales(height, width, self.minsize, self.factor)
+        rectangles = self.detect_pnet(batch, height, width)
+        rectangles = self.detect_rnet(batch, rectangles, height, width)
+        rectangles = self.detect_onet(batch, rectangles, height, width)
         ret_boxes = list()
         ret_points = list()
         for rects in rectangles:
-            if rects:
-                total_boxes = np.array([result[:5] for result in rects])
-                points = np.array([result[5:] for result in rects]).T
+            if rects.size != 0:
+                total_boxes = rects[:5]
+                points = np.empty(0) # rects[5:].T
             else:
-                total_boxes = np.empty((0, 9))
+                total_boxes = np.empty((0, 5))
                 points = np.empty(0)
             ret_boxes.append(total_boxes)
             ret_points.append(points)
@@ -239,99 +241,80 @@ class MTCNN():
     def detect_pnet(self, images, height, width):
         # pylint: disable=too-many-locals
         """ first stage - fast proposal network (pnet) to obtain face candidates """
-        if self._pnet_scales is None:
-            self._pnet_scales = calculate_scales(height, width, self.minsize, self.factor)
         rectangles = [[] for _ in range(images.shape[0])]
-        batch_items = images.shape[0]
+        method = cv2.INTER_AREA
         for scale in self._pnet_scales:
-            rwidth, rheight = int(width * scale), int(height * scale)
-            batch = np.empty((batch_items, rheight, rwidth, 3), dtype="float32")
-            for idx in range(batch_items):
-                batch[idx, ...] = cv2.resize(images[idx, ...], (rwidth, rheight))
+            batch = np.stack([cv2.resize(image, (0, 0), fx=scale, fy=scale, interpolation=method)
+                              for image in images])
             output = self.pnet.predict(batch)
-            cls_prob = output[0][..., 1]
-            roi = output[1]
-            out_h, out_w = cls_prob.shape[1:3]
-            out_side = max(out_h, out_w)
-            cls_prob = np.swapaxes(cls_prob, 1, 2)
-            roi = np.swapaxes(roi, 1, 3)
-            for idx in range(batch_items):
-                # first index 0 = class score, 1 = one hot repr
-                rectangle = detect_face_12net(cls_prob[idx, ...],
-                                              roi[idx, ...],
-                                              out_side,
-                                              1 / scale,
-                                              width,
-                                              height,
-                                              self.threshold[0])
-                rectangles[idx].extend(rectangle)
-        return [nms(x, 0.7, 'iou') for x in rectangles]
+            cls_probs = np.swapaxes(output[0][..., 1], 1, 2)
+            roi_probs = np.swapaxes(output[1], 1, 3)
+            longest_side = max(cls_probs.shape[1:3])
+            for img_number, (cls_prob, roi_prob) in enumerate(zip(cls_probs, roi_probs)):
+                boxes = detect_face_12net(cls_prob,
+                                          roi_prob,
+                                          longest_side,
+                                          1.0 / scale,
+                                          width,
+                                          height,
+                                          self.threshold[0])
+                rectangles[img_number].extend(boxes)
+        ret = [nms(np.stack(box_list), 0.7, 'iou') for box_list in rectangles]
+        return ret
 
-    def detect_rnet(self, images, rectangle_batch, height, width):
+    def detect_rnet(self, image_batch, rectangle_batch, height, width):
         """ second stage - refinement of face candidates with rnet """
         ret = []
-        # TODO: batching
-        for idx, rectangles in enumerate(rectangle_batch):
-            if not rectangles:
-                ret.append(list())
+        for rectangles, image in zip(rectangle_batch, image_batch):
+            if rectangles.size == 0:
+                ret.append(np.empty(0))
                 continue
-            image = images[idx]
-            crop_number = 0
-            predict_24_batch = []
-            for rect in rectangles:
-                crop_img = image[int(rect[1]):int(rect[3]), int(rect[0]):int(rect[2])]
+            predict_batch = []
+            for rectangle in rectangles:
+                int_rect = np.rint(rectangle[0:4]).astype(np.uint32)
+                crop_img = image[int_rect[1]:int_rect[3], int_rect[0]:int_rect[2]]
                 scale_img = cv2.resize(crop_img, (24, 24))
-                predict_24_batch.append(scale_img)
-                crop_number += 1
-            predict_24_batch = np.array(predict_24_batch)
-            output = self.rnet.predict(predict_24_batch, batch_size=128)
-            cls_prob = output[0]
-            cls_prob = np.array(cls_prob)
-            roi_prob = output[1]
-            roi_prob = np.array(roi_prob)
-            ret.append(filter_face_24net(
-                cls_prob, roi_prob, rectangles, width, height, self.threshold[1]
-            ))
+                predict_batch.append(scale_img)
+            predict_batch = np.array(predict_batch)
+            cls_prob, roi_prob = self.rnet.predict(predict_batch, batch_size=128)
+            ret.append(filter_face_24net(cls_prob[:, 1],
+                                         roi_prob,
+                                         rectangles,
+                                         width,
+                                         height,
+                                         self.threshold[1]))
         return ret
 
-    def detect_onet(self, images, rectangle_batch, height, width):
+    def detect_onet(self, image_batch, rectangle_batch, height, width):
         """ third stage - further refinement and facial landmarks positions with onet """
-        ret = list()
-        # TODO: batching
-        for idx, rectangles in enumerate(rectangle_batch):
-            if not rectangles:
-                ret.append(list())
+        ret = []
+        for rectangles, image in zip(rectangle_batch, image_batch):
+            if rectangles.size == 0:
+                ret.append(np.empty(0))
                 continue
-            image = images[idx]
-            crop_number = 0
             predict_batch = []
-            for rect in rectangles:
-                crop_img = image[int(rect[1]):int(rect[3]), int(rect[0]):int(rect[2])]
+            for rectangle in rectangles:
+                int_rect = np.rint(rectangle[0:4]).astype(np.uint32)
+                crop_img = image[int_rect[1]:int_rect[3], int_rect[0]:int_rect[2]]
                 scale_img = cv2.resize(crop_img, (48, 48))
                 predict_batch.append(scale_img)
-                crop_number += 1
             predict_batch = np.array(predict_batch)
-            output = self.onet.predict(predict_batch, batch_size=128)
-            cls_prob = output[0]
-            roi_prob = output[1]
-            pts_prob = output[2]  # index
-            ret.append(filter_face_48net(
-                cls_prob,
-                roi_prob,
-                pts_prob,
-                rectangles,
-                width,
-                height,
-                self.threshold[2]
-            ))
+            cls_prob, roi_prob, pts_prob = self.onet.predict(predict_batch, batch_size=128)
+            ret.append(filter_face_48net(cls_prob[:, 1],
+                                         roi_prob,
+                                         rectangles,
+                                         width,
+                                         height,
+                                         self.threshold[2],
+                                         pts_prob))
         return ret
 
 
-def detect_face_12net(cls_prob, roi, out_side, scale, width, height, threshold):
+def detect_face_12net(classification_probability, roi, out_side, scale, width, height, threshold):
     # pylint: disable=too-many-locals, too-many-arguments
     """ Detect face position and calibrate bounding box on 12net feature map(matrix version)
     Input:
-        cls_prob : softmax feature map for face classify
+        classification_probability : softmax feature map for face classify
         roi      : feature map for regression
         out_side : feature map's largest size
         scale    : current input image scale in multi-scales
@@ -339,41 +322,34 @@ def detect_face_12net(cls_prob, roi, out_side, scale, width, height, threshold):
         height   : image's origin height
         threshold: 0.6 can have 99% recall rate
     """
-    in_side = 2*out_side+11
-    stride = 0
-    if out_side != 1:
-        stride = float(in_side-12)/(out_side-1)
-    (var_x, var_y) = np.where(cls_prob >= threshold)
-    boundingbox = np.array([var_x, var_y]).T
-    bb1 = np.fix((stride * (boundingbox) + 0) * scale)
-    bb2 = np.fix((stride * (boundingbox) + 11) * scale)
+    stride = (2.0 * out_side - 1.0) / (out_side - 1.0) if out_side != 1 else 0.0
+    (var_x, var_y) = np.where(classification_probability >= threshold)
+    boundingbox = np.array([var_x, var_y])
+    boundingbox = boundingbox.T
+    bb1 = stride * boundingbox * scale
+    bb2 = np.fix(bb1 + 11.0 * scale)
+    bb1 = np.fix(bb1)
     boundingbox = np.concatenate((bb1, bb2), axis=1)
     dx_1 = roi[0][var_x, var_y]
     dx_2 = roi[1][var_x, var_y]
     dx3 = roi[2][var_x, var_y]
     dx4 = roi[3][var_x, var_y]
-    score = np.array([cls_prob[var_x, var_y]]).T
+    score = np.array([classification_probability[var_x, var_y]]).T
     offset = np.array([dx_1, dx_2, dx3, dx4]).T
-    boundingbox = boundingbox + offset*12.0*scale
+    
+    dx = roi[:, var_x, var_y].T
+    boundingbox = boundingbox + offset * 12.0 * scale
     rectangles = np.concatenate((boundingbox, score), axis=1)
-    rectangles = rect2square(rectangles)
-    pick = []
-    for rect in rectangles:
-        x_1 = int(max(0, rect[0]))
-        y_1 = int(max(0, rect[1]))
-        x_2 = int(min(width, rect[2]))
-        y_2 = int(min(height, rect[3]))
-        sc_ = rect[4]
-        if x_2 > x_1 and y_2 > y_1:
-            pick.append([x_1, y_1, x_2, y_2, sc_])
-    return nms(pick, 0.3, "iou")
+    rectangles = centered_square(rectangles, height, width)
+    retval = nms(rectangles, 0.5, "iou")
+    return retval
 
 
-def filter_face_24net(cls_prob, roi, rectangles, width, height, threshold):
+def filter_face_24net(classification_probability, roi, rectangles, width, height, threshold):
     # pylint: disable=too-many-locals, too-many-arguments
     """ Filter face position and calibrate bounding box on 12net's output
     Input:
-        cls_prob  : softmax feature map for face classify
+        classification_probability  : softmax feature map for face classify
         roi_prob  : feature map for regression
         rectangles: 12net's predict
         width     : image's origin width
@@ -382,97 +358,80 @@ def filter_face_24net(cls_prob, roi, rectangles, width, height, threshold):
     Output:
         rectangles: possible face positions
     """
-    prob = cls_prob[:, 1]
-    pick = np.where(prob >= threshold)
+    pick = np.where(classification_probability >= threshold)
     rectangles = np.array(rectangles)
-    x_1 = rectangles[pick, 0]
-    y_1 = rectangles[pick, 1]
-    x_2 = rectangles[pick, 2]
-    y_2 = rectangles[pick, 3]
-    sc_ = np.array([prob[pick]]).T
-    dx_1 = roi[pick, 0]
-    dx_2 = roi[pick, 1]
-    dx3 = roi[pick, 2]
-    dx4 = roi[pick, 3]
-    r_width = x_2-x_1
-    r_height = y_2-y_1
-    x_1 = np.array([(x_1 + dx_1 * r_width)[0]]).T
-    y_1 = np.array([(y_1 + dx_2 * r_height)[0]]).T
-    x_2 = np.array([(x_2 + dx3 * r_width)[0]]).T
-    y_2 = np.array([(y_2 + dx4 * r_height)[0]]).T
-    rectangles = np.concatenate((x_1, y_1, x_2, y_2, sc_), axis=1)
-    rectangles = rect2square(rectangles)
-    pick = []
-    for rect in rectangles:
-        x_1 = int(max(0, rect[0]))
-        y_1 = int(max(0, rect[1]))
-        x_2 = int(min(width, rect[2]))
-        y_2 = int(min(height, rect[3]))
-        sc_ = rect[4]
-        if x_2 > x_1 and y_2 > y_1:
-            pick.append([x_1, y_1, x_2, y_2, sc_])
-    return nms(pick, 0.3, 'iou')
+
+    confidence = classification_probability[pick]
+    left = rectangles[pick, 0]
+    right = rectangles[pick, 2]
+    top = rectangles[pick, 1]
+    bot = rectangles[pick, 3]
+    net_width = right - left
+    net_height = bot - top
+
+    left_offset = roi[pick, 0] * net_width
+    right_offset = roi[pick, 2] * net_width
+    top_offset = roi[pick, 1] * net_height
+    bot_offset = roi[pick, 3] * net_height
+    left += left_offset
+    right += right_offset
+    top += top_offset
+    bot += bot_offset
+
+    rectangles = np.concatenate((left, top, right, bot, confidence[None, :]), axis=0).T
+    rectangles = centered_square(rectangles, height, width)
+    retval = nms(rectangles, 0.7, 'iou')
+    return retval
 
 
-def filter_face_48net(cls_prob, roi, pts, rectangles, width, height, threshold):
+def filter_face_48net(classification_probability, roi, rectangles, width, height, threshold, pts):
     # pylint: disable=too-many-locals, too-many-arguments
-    """ Filter face position and calibrate bounding box on 12net's output
+    """ Filter face position and calibrate bounding box on 24net's output
     Input:
-        cls_prob  : cls_prob[1] is face possibility
+        classification_probability  : cls_prob[1] is face possibility
         roi       : roi offset
-        pts       : 5 landmark
         rectangles: 12net's predict, rectangles[i][0:3] is the position, rectangles[i][4] is score
         width     : image's origin width
         height    : image's origin height
         threshold : 0.7 can have 94% recall rate on CelebA-database
+        pts       : 5 landmark
     Output:
         rectangles: face positions and landmarks
     """
-    prob = cls_prob[:, 1]
-    pick = np.where(prob >= threshold)
+    pick = np.where(classification_probability >= threshold)
     rectangles = np.array(rectangles)
-    x_1 = rectangles[pick, 0]
-    y_1 = rectangles[pick, 1]
-    x_2 = rectangles[pick, 2]
-    y_2 = rectangles[pick, 3]
-    sc_ = np.array([prob[pick]]).T
-    dx_1 = roi[pick, 0]
-    dx_2 = roi[pick, 1]
-    dx3 = roi[pick, 2]
-    dx4 = roi[pick, 3]
-    r_width = x_2-x_1
-    r_height = y_2-y_1
-    pts0 = np.array([(r_width * pts[pick, 0] + x_1)[0]]).T
-    pts1 = np.array([(r_height * pts[pick, 5] + y_1)[0]]).T
-    pts2 = np.array([(r_width * pts[pick, 1] + x_1)[0]]).T
-    pts3 = np.array([(r_height * pts[pick, 6] + y_1)[0]]).T
-    pts4 = np.array([(r_width * pts[pick, 2] + x_1)[0]]).T
-    pts5 = np.array([(r_height * pts[pick, 7] + y_1)[0]]).T
-    pts6 = np.array([(r_width * pts[pick, 3] + x_1)[0]]).T
-    pts7 = np.array([(r_height * pts[pick, 8] + y_1)[0]]).T
-    pts8 = np.array([(r_width * pts[pick, 4] + x_1)[0]]).T
-    pts9 = np.array([(r_height * pts[pick, 9] + y_1)[0]]).T
-    x_1 = np.array([(x_1 + dx_1 * r_width)[0]]).T
-    y_1 = np.array([(y_1 + dx_2 * r_height)[0]]).T
-    x_2 = np.array([(x_2 + dx3 * r_width)[0]]).T
-    y_2 = np.array([(y_2 + dx4 * r_height)[0]]).T
-    rectangles = np.concatenate((x_1, y_1, x_2, y_2, sc_,
-                                 pts0, pts1, pts2, pts3, pts4, pts5, pts6, pts7, pts8, pts9),
-                                axis=1)
-    pick = []
-    for rect in rectangles:
-        x_1 = int(max(0, rect[0]))
-        y_1 = int(max(0, rect[1]))
-        x_2 = int(min(width, rect[2]))
-        y_2 = int(min(height, rect[3]))
-        if x_2 > x_1 and y_2 > y_1:
-            pick.append([x_1, y_1, x_2, y_2,
-                         rect[4], rect[5], rect[6], rect[7], rect[8], rect[9],
-                         rect[10], rect[11], rect[12], rect[13], rect[14]])
-    return nms(pick, 0.3, 'iom')
+
+    confidence = classification_probability[pick]
+    left = rectangles[pick, 0]
+    right = rectangles[pick, 2]
+    top = rectangles[pick, 1]
+    bot = rectangles[pick, 3]
+    net_width = right - left
+    net_height = bot - top
+
+    left_offset = roi[pick, 0] * net_width
+    right_offset = roi[pick, 2] * net_width
+    top_offset = roi[pick, 1] * net_height
+    bot_offset = roi[pick, 3] * net_height
+    left += left_offset
+    right += right_offset
+    top += top_offset
+    bot += bot_offset
+
+    left_offset = (pts[pick, 0:5] * net_width[:, :, None] + left[:, :, None]).T
+    top_offset = (pts[pick, 5:10] * net_height[:, :, None] + top[:, :, None]).T
+    rectangles = np.concatenate((left, top, right, bot, confidence[None, :]), axis=0).T
+    """
+                                 left_offset[0], top_offset[0], left_offset[1], top_offset[1],
+                                 left_offset[2], top_offset[2], left_offset[3], top_offset[3],
+                                 left_offset[4], top_offset[4]), axis=0).T
+    """
+    #rectangles = centered_square(rectangles, height, width)
+    retval = nms(rectangles, 0.7, 'iom')
+    return retval
 
 
-def nms(rectangles, threshold, method):
+def nms(boxes, threshold, method):
     # pylint:disable=too-many-locals
     """ apply NMS(non-maximum suppression) on ROIs in same scale(matrix version)
     Input:
@@ -480,9 +439,6 @@ def nms(rectangles, threshold, method):
     Output:
         rectangles: same as input
     """
-    if not rectangles:
-        return rectangles
-    boxes = np.array(rectangles)
     x_1 = boxes[:, 0]
     y_1 = boxes[:, 1]
     x_2 = boxes[:, 2]
@@ -506,7 +462,7 @@ def nms(rectangles, threshold, method):
             var_o = inter / (area[s_sort[-1]] + area[s_sort[0:-1]] - inter)
         pick.append(s_sort[-1])
         s_sort = s_sort[np.where(var_o <= threshold)[0]]
-    result_rectangle = boxes[pick].tolist()
+    result_rectangle = boxes[pick]
     return result_rectangle
 
 
@@ -521,30 +477,47 @@ def calculate_scales(height, width, minsize, factor):
             scales  : Multi-scale
     """
     factor_count = 0
-    minl = np.amin([height, width])
+    min_layer = np.amin([height, width])
     var_m = 12.0 / minsize
-    minl = minl * var_m
-    # create scale pyramid
+    min_layer *= var_m
     scales = []
-    while minl >= 12:
+    while min_layer >= 12:
         scales += [var_m * np.power(factor, factor_count)]
-        minl = minl * factor
+        min_layer *= factor
         factor_count += 1
     logger.trace(scales)
     return scales
 
+def centered_square(rectangles, height, width):
+    """ Convert axis-parallel rectangles into axis-parallel squares centered at each rectangle's
+    center
 
-def rect2square(rectangles):
-    """ change rectangles into squares (matrix version)
-    Input:
-        rectangles: rectangles[i][0:3] is the position, rectangles[i][4] is score
-    Output:
-        squares: same as input
+    Parameters
+    ----------
+    rectangles: :class:`numpy.ndarry`
+        Array of shape Nx5, with
+            the first axis contains the number of bounding box candidates
+            the second axis is comprised of 5 items
+                x-coordinate of left side of the rectangle
+                y-coordinate of top side of the rectangle
+                x-coordinate of right side of the rectangle
+                y-coordinate of bottom side of the rectangle
+                NN model's confidence of the bounding box rectangle's accuracy
+
+    Returns
+    -------
+    squares: :class:`numpy.ndarry`
+        Array of shape Nx5 with the same parameters as rectangles
     """
-    width = rectangles[:, 2] - rectangles[:, 0]
-    height = rectangles[:, 3] - rectangles[:, 1]
-    length = np.maximum(width, height).T
-    rectangles[:, 0] = rectangles[:, 0] + width * 0.5 - length * 0.5
-    rectangles[:, 1] = rectangles[:, 1] + height * 0.5 - length * 0.5
-    rectangles[:, 2:4] = rectangles[:, 0:2] + np.repeat([length], 2, axis=0).T
-    return rectangles
+
+    center_x = np.mean(rectangles[:, 0:3:2], dtype=np.float32, axis=1)
+    center_y = np.mean(rectangles[:, 1:4:2], dtype=np.float32, axis=1)
+    half_length = np.maximum(rectangles[:, 2] - rectangles[:, 0],
+                             rectangles[:, 3] - rectangles[:, 1], dtype=np.float32) * 0.5
+    squares = np.stack([center_x, center_y, center_x, center_y, rectangles[:, 4]], axis=1)
+    offsets = np.stack([-half_length, -half_length, half_length, half_length], axis=1)
+    squares[:, 0:4] += offsets
+    squares[:, 0:4] = np.maximum(0.0, squares[:, 0:4])
+    squares[:, 2] = np.minimum(width, squares[:, 2])
+    squares[:, 3] = np.minimum(height, squares[:, 3])
+    return squares
