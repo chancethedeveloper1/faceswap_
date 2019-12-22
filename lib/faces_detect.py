@@ -61,6 +61,8 @@ class DetectedFace():
     h: int
         The height (in pixels) of the face's bounding box as discovered in
         :mod:`plugins.extract.detect`
+    confidence: float32
+        The condfidence in percentage terms as discovered in :mod:`plugins.extract.detect`
     landmarks_xy: list
         The 68 point landmarks as discovered in :mod:`plugins.extract.align`.
     mask: dict
@@ -70,20 +72,21 @@ class DetectedFace():
         The hash of the face. This cannot be set until the file is saved due to image compression,
         but will be set if loading data from :func:`from_alignment`
     """
-    def __init__(self, image=None, x=None, w=None, y=None, h=None,
-                 landmarks_xy=None, mask=None, filename=None):
-        logger.trace("Initializing %s: (image: %s, x: %s, w: %s, y: %s, h:%s, "
-                     "landmarks_xy: %s, mask: %s, filename: %s)",
+    def __init__(self, image=None, bounding_box=None, landmarks_xy=None, mask=None, filename=None):
+        logger.trace("Initializing %s: (image: %s, bounding_box:%s,landmarks_xy: %s, mask: %s, "
+                     "filename: %s)",
                      self.__class__.__name__,
                      image.shape if image is not None and image.any() else image,
-                     x, w, y, h, landmarks_xy,
+                     bounding_box, landmarks_xy,
                      {k: v.shape for k, v in mask} if mask is not None else mask,
                      filename)
         self.image = image
-        self.x = x  # pylint:disable=invalid-name
-        self.w = w  # pylint:disable=invalid-name
-        self.y = y  # pylint:disable=invalid-name
-        self.h = h  # pylint:disable=invalid-name
+        self.bounding_box = bounding_box
+        self.x = bounding_box[0]  # pylint:disable=invalid-name
+        self.y = bounding_box[1]  # pylint:disable=invalid-name
+        self.w = bounding_box[2] - bounding_box[0]  # pylint:disable=invalid-name
+        self.h = bounding_box[3] - bounding_box[1]  # pylint:disable=invalid-name
+        self.confidence = bounding_box[4]
         self.landmarks_xy = landmarks_xy
         self.mask = dict() if mask is None else mask
         self.hash = None
@@ -112,6 +115,11 @@ class DetectedFace():
     def bottom(self):
         """int: Bottom point (in pixels) of face detection bounding box within the parent image """
         return self.y + self.h
+
+    @property
+    def box_confidence(self):
+        """float32: The condfidence of the face detection bounding box within the parent image """
+        return self.confidence
 
     @property
     def _extract_ratio(self):
@@ -153,7 +161,7 @@ class DetectedFace():
         -------
         alignment: dict
             The alignment dict will be returned with the keys ``x``, ``w``, ``y``, ``h``,
-            ``landmarks_xy``, ``mask``, ``hash``.
+            ``confidence``, ``landmarks_xy``, ``mask``, ``hash``.
         """
 
         alignment = dict()
@@ -161,6 +169,7 @@ class DetectedFace():
         alignment["w"] = self.w
         alignment["y"] = self.y
         alignment["h"] = self.h
+        alignment["confidence"] = self.confidence
         alignment["landmarks_xy"] = self.landmarks_xy
         alignment["hash"] = self.hash
         alignment["mask"] = {name: mask.to_dict() for name, mask in self.mask.items()}
@@ -176,6 +185,8 @@ class DetectedFace():
         alignment: dict
             A dictionary entry for a face from an alignments file containing the keys
             ``x``, ``w``, ``y``, ``h``, ``landmarks_xy``.
+            Optionally the key ``confidence`` will be provided, but not all use cases will know the
+            face confidence at this time.
             Optionally the key ``hash`` will be provided, but not all use cases will know the
             face hash at this time.
             Optionally the key ``mask`` will be provided, but legacy alignments will not have
@@ -191,6 +202,7 @@ class DetectedFace():
         self.w = alignment["w"]
         self.y = alignment["y"]
         self.h = alignment["h"]
+        self.confidence = alignment.get("confidence", None)
         landmarks = alignment["landmarks_xy"]
         if not isinstance(landmarks, np.ndarray):
             landmarks = np.array(landmarks, dtype="float32")
