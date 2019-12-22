@@ -120,7 +120,7 @@ class Detector(Extractor):  # pylint:disable=abstract-method
             batch.setdefault("pad", []).append(pad)
 
         if batch:
-            batch["image"] = np.array(batch["image"], dtype="float32")
+            batch["image"] = np.array(batch["image"], dtype=np.float32)
             logger.trace("Returning batch: %s", {k: v.shape if isinstance(v, np.ndarray) else v
                                                  for k, v in batch.items()})
         else:
@@ -152,12 +152,12 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         logger.trace("Item out: %s", {k: v.shape if isinstance(v, np.ndarray) else v
                                       for k, v in batch.items()})
 
-        batch_faces = [[self.to_detected_face(face[0], face[1], face[2], face[3])
-                        for face in faces]
-                       for faces in batch["prediction"]]
+        batch_faces = [[DetectedFace(bounding_box=face_box)
+                        for face_box in frame]
+                       for frame in batch["prediction"]]
         # Rotations
-        if any(m.any() for m in batch["rotmat"]) and any(batch_faces):
-            batch_faces = [[self._rotate_face(face, rotmat) if rotmat.any() else face
+        if any(rotmat.any() for rotmat in batch["rotmat"]) and any(batch_faces):
+            batch_faces = [[self._rotate_face(face, rotmat)
                             for face in faces]
                            for faces, rotmat in zip(batch_faces, batch["rotmat"])]
 
@@ -165,14 +165,14 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         batch_faces = self._remove_zero_sized_faces(batch_faces)
 
         # Scale back out to original frame
-        batch["detected_faces"] = [[self.to_detected_face((face.left - pad[0]) / scale,
-                                                          (face.top - pad[1]) / scale,
-                                                          (face.right - pad[0]) / scale,
-                                                          (face.bottom - pad[1]) / scale)
-                                    for face in faces]
-                                   for scale, pad, faces in zip(batch["scale"],
-                                                                batch["pad"],
-                                                                batch_faces)]
+        batch["detected_faces"] = []
+        for scale, pad, faces in zip(batch["scale"], batch["pad"], batch_faces):
+            faces_in_frame = []
+            for face in faces:
+                face.bounding_box[0:3:2] = (face.bounding_box[0:3:2] - pad[0]) / scale
+                face.bounding_box[1:4:2] = (face.bounding_box[1:4:2] - pad[1]) / scale
+                faces_in_frame.append(DetectedFace(bounding_box=face.bounding_box))
+            batch["detected_faces"].append(faces_in_frame)
 
         if self.min_size > 0 and batch.get("detected_faces", None):
             batch["detected_faces"] = self._filter_small_faces(batch["detected_faces"])
@@ -185,14 +185,6 @@ class Detector(Extractor):  # pylint:disable=abstract-method
                          "item: %s", output.filename, output.image_shape, output.detected_faces,
                          output)
             yield output
-
-    @staticmethod
-    def to_detected_face(left, top, right, bottom):
-        """ Return a :class:`~lib.faces_detect.DetectedFace` object for the bounding box """
-        return DetectedFace(x=int(round(left)),
-                            w=int(round(right - left)),
-                            y=int(round(top)),
-                            h=int(round(bottom - top)))
 
     # <<< PROTECTED ACCESS METHODS >>> #
     # <<< PREDICT WRAPPER >>> #
@@ -233,7 +225,7 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         scale = self._set_scale(item.image_size)
         pad = self._set_padding(item.image_size, scale)
 
-        image = self._scale_image(image, item.image_size, scale)
+        image = self._scale_image(image, item.image_channels, scale)
         image = self._pad_image(image)
         logger.trace("compiled: (images shape: %s, scale: %s, pad: %s)", image.shape, scale, pad)
         return image, scale, pad
@@ -246,37 +238,30 @@ class Detector(Extractor):  # pylint:disable=abstract-method
 
     def _set_padding(self, image_size, scale):
         """ Set the image padding for non-square images """
-        pad_left = int(self.input_size - int(image_size[1] * scale)) // 2
-        pad_top = int(self.input_size - int(image_size[0] * scale)) // 2
-        return pad_left, pad_top
+        pad_x = int((self.input_size - image_size[1] * scale) / 2.0)
+        pad_y = int((self.input_size - image_size[0] * scale) / 2.0)
+        return pad_x, pad_y
 
     @staticmethod
-    def _scale_image(image, image_size, scale):
+    def _scale_image(image, channels, scale):
         """ Scale the image and optional pad to given size """
-        interpln = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
         if scale != 1.0:
-            dims = (int(image_size[1] * scale), int(image_size[0] * scale))
-            logger.trace("Resizing detection image from %s to %s. Scale=%s",
-                         "x".join(str(i) for i in reversed(image_size)),
-                         "x".join(str(i) for i in dims), scale)
-            image = cv2.resize(image, dims, interpolation=interpln)
-        logger.trace("Resized image shape: %s", image.shape)
+            interpln = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+            logger.trace("Resizing detection image by scale=%s", scale)
+            image = cv2.resize(image, (0, 0), fx=scale, fy=scale, interpolation=interpln)
+            image = image if channels > 1 else image[..., None]
+            logger.trace("Resized image shape: %s", image.shape)
         return image
 
     def _pad_image(self, image):
         """ Pad a resized image to input size """
         height, width = image.shape[:2]
         if width < self.input_size or height < self.input_size:
-            pad_l = (self.input_size - width) // 2
-            pad_r = (self.input_size - width) - pad_l
-            pad_t = (self.input_size - height) // 2
-            pad_b = (self.input_size - height) - pad_t
-            image = cv2.copyMakeBorder(image,
-                                       pad_t,
-                                       pad_b,
-                                       pad_l,
-                                       pad_r,
-                                       cv2.BORDER_CONSTANT)
+            pad_width = self.input_size - width
+            pad_height = self.input_size - height
+            left, top = pad_width // 2, pad_height // 2
+            right, bot = pad_width - left, pad_height - top
+            image = cv2.copyMakeBorder(image, top, bot, left, right, cv2.BORDER_CONSTANT)
         logger.trace("Padded image shape: %s", image.shape)
         return image
 
@@ -295,17 +280,11 @@ class Detector(Extractor):  # pylint:disable=abstract-method
 
     def _filter_small_faces(self, detected_faces):
         """ Filter out any faces smaller than the min size threshold """
-        retval = []
-        for faces in detected_faces:
-            this_image = []
-            for face in faces:
-                face_size = (face.w ** 2 + face.h ** 2) ** 0.5
-                if face_size < self.min_size:
-                    logger.debug("Removing detected face: (face_size: %s, min_size: %s",
-                                 face_size, self.min_size)
-                    continue
-                this_image.append(face)
-            retval.append(this_image)
+        square_root_two = 2.0 ** 0.5
+        retval = [[face
+                   for face in faces
+                   if (face.w * square_root_two >= self.min_size)]
+                  for faces in detected_faces]
         return retval
 
     # <<< IMAGE ROTATION METHODS >>> #
@@ -385,23 +364,21 @@ class Detector(Extractor):  # pylint:disable=abstract-method
                         [face.left, face.bottom]]
         rotation_matrix = cv2.invertAffineTransform(rotation_matrix)
 
-        points = np.array(bounding_box, "int32")
+        points = np.array(bounding_box, dtype=np.float32)
         points = np.expand_dims(points, axis=0)
         transformed = cv2.transform(points, rotation_matrix).astype("int32")
         rotated = transformed.squeeze()
 
         # Bounding box should follow x, y planes, so get min/max for non-90 degree rotations
-        pt_x = min([pnt[0] for pnt in rotated])
-        pt_y = min([pnt[1] for pnt in rotated])
-        pt_x1 = max([pnt[0] for pnt in rotated])
-        pt_y1 = max([pnt[1] for pnt in rotated])
-        width = pt_x1 - pt_x
-        height = pt_y1 - pt_y
+        pt_left = min([pnt[0] for pnt in rotated])
+        pt_top = min([pnt[1] for pnt in rotated])
+        pt_right = max([pnt[0] for pnt in rotated])
+        pt_bot = max([pnt[1] for pnt in rotated])
 
-        face.x = int(pt_x)
-        face.y = int(pt_y)
-        face.w = int(width)
-        face.h = int(height)
+        face.x = pt_x
+        face.y = pt_y
+        face.w = pt_right - pt_left
+        face.h = pt_bot - pt_top
         return face
 
     def _rotate_image_by_angle(self, image, angle):
