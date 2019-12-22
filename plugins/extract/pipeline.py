@@ -492,12 +492,14 @@ class ExtractMedia():
         later with :func:`add_detected_faces`. Default: None
     """
 
-    def __init__(self, filename, image, detected_faces=None):
-        logger.trace("Initializing %s: (filename: '%s', image shape: %s, detected_faces: %s)",
-                     self.__class__.__name__, filename, image.shape, detected_faces)
+    def __init__(self, filename, image, detected_faces=None, is_video=True):
+        logger.trace("Initializing %s: (filename: '%s', image shape: %s, detected_faces: %s, "
+                     "is_video: %s)", self.__class__.__name__, filename, image.shape,
+                     detected_faces, is_video)
         self._filename = filename
         self._image = image
         self._detected_faces = detected_faces
+        self._is_video = is_video
 
     @property
     def filename(self):
@@ -518,12 +520,23 @@ class ExtractMedia():
     def image_size(self):
         """ tuple: The (`height`, `width`) of the stored :attr:`image`. """
         return self._image.shape[:2]
+        
+    @property
+    def image_channels(self):
+        """ int: The channels of the stored :attr:`image`. """
+        return self._image.shape[2]
 
     @property
     def detected_faces(self):
         """list: A list of :class:`~lib.faces_detect.DetectedFace` objects in the
         :attr:`image`. """
         return self._detected_faces
+
+    @property
+    def is_video(self):
+        """ bool: Does this :attr:`image` filename coem from a video. Attribute used for tracking
+        purposes.  """
+        return self._is_video
 
     def get_image_copy(self, colorformat):
         """ Get a copy of the image in the requested color format.
