@@ -21,16 +21,15 @@ class Detect(Detector):
 
     def init_model(self):
         """ Initialize CV2 DNN Detector Model"""
-        self.model = cv2.dnn.readNetFromCaffe(self.model_path[1],  # pylint: disable=no-member
-                                              self.model_path[0])
-        self.model.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)  # pylint: disable=no-member
+        self.model = cv2.dnn.readNetFromCaffe(self.model_path[1], self.model_path[0])
+        self.model.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
     def process_input(self, batch):
         """ Compile the detection image(s) for prediction """
-        batch["feed"] = cv2.dnn.blobFromImages(batch["image"],  # pylint: disable=no-member
+        batch["feed"] = cv2.dnn.blobFromImages(batch["image"],
                                                scalefactor=1.0,
                                                size=(self.input_size, self.input_size),
-                                               mean=[104, 117, 123],
+                                               mean=[104.0, 117.0, 123.0],
                                                swapRB=False,
                                                crop=False)
         return batch
@@ -44,18 +43,12 @@ class Detect(Detector):
 
     def finalize_predictions(self, predictions):
         """ Filter faces based on confidence level """
-        faces = list()
-        for i in range(predictions.shape[2]):
-            confidence = predictions[0, 0, i, 2]
-            if confidence >= self.confidence:
-                logger.trace("Accepting due to confidence %s >= %s",
-                             confidence, self.confidence)
-                faces.append([(predictions[0, 0, i, 3] * self.input_size),
-                              (predictions[0, 0, i, 4] * self.input_size),
-                              (predictions[0, 0, i, 5] * self.input_size),
-                              (predictions[0, 0, i, 6] * self.input_size)])
-        logger.trace("faces: %s", faces)
-        return [np.array(faces)]
+        predictions = np.swapaxes(predictions, 0, 2)
+        pick = np.where(predictions[:, 0, 0, 2] >= self.confidence)
+        boxes = predictions[pick, 0, 0, 3:7] * self.input_size
+        boxes = np.concatanate((boxes, predictions[pick, 0, 0, 2]), axis=-1)
+        logger.debug("Accepting %s faces over confidence %s", pick.shape[0], self.confidence)
+        return [boxes]
 
     def process_output(self, batch):
         """ Compile found faces for output """
