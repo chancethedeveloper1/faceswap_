@@ -57,7 +57,6 @@ class Extract():
                                     configfile=configfile,
                                     multiprocess=not self._args.singleprocess,
                                     rotate_images=self._args.rotate_images,
-                                    min_size=self._args.min_size,
                                     normalize_method=normalization)
         self._threads = list()
         self._verify_output = False

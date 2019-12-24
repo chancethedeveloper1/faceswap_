@@ -39,9 +39,6 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         Pass in a single number to use increments of that size up to 360, or pass in a ``list`` of
         ``ints`` to enumerate exactly what angles to check. Can also pass in ``'on'`` to increment
         at 90 degree intervals. Default: ``None``
-    min_size: int, optional
-        Filters out faces detected below this size. Length, in pixels across the diagonal of the
-        bounding box. Set to ``0`` for off. Default: ``0``
 
     Other Parameters
     ----------------
@@ -57,15 +54,10 @@ class Detector(Extractor):  # pylint:disable=abstract-method
     plugins.extract.mask._base : Masker parent class for extraction plugins.
     """
 
-    def __init__(self, git_model_id=None, model_filename=None,
-                 configfile=None, rotation=None, min_size=0):
-        logger.debug("Initializing %s: (rotation: %s, min_size: %s)", self.__class__.__name__,
-                     rotation, min_size)
-        super().__init__(git_model_id,
-                         model_filename,
-                         configfile=configfile)
+    def __init__(self, git_model_id=None, model_filename=None, configfile=None, rotation=None):
+        logger.debug("Initializing %s: (rotation: %s)", self.__class__.__name__, rotation)
+        super().__init__(git_model_id, model_filename, configfile=configfile)
         self.rotation = self._get_rotation_angles(rotation)
-        self.min_size = min_size
 
         self._plugin_type = "detect"
 
@@ -174,8 +166,7 @@ class Detector(Extractor):  # pylint:disable=abstract-method
                 faces_in_frame.append(DetectedFace(bounding_box=face.bounding_box))
             batch["detected_faces"].append(faces_in_frame)
 
-        if self.min_size > 0 and batch.get("detected_faces", None):
-            batch["detected_faces"] = self._filter_small_faces(batch["detected_faces"])
+        batch["detected_faces"] = self._filter_small_faces(batch["detected_faces"])
 
         batch = self._dict_lists_to_list_dicts(batch)
         for item in batch:
@@ -279,11 +270,10 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         return retval
 
     def _filter_small_faces(self, detected_faces):
-        """ Filter out any faces smaller than the min size threshold """
-        square_root_two = 2.0 ** 0.5
+        """ Filter out any faces smaller than a minimum size threshold of 32 pixel x 32 pixels """
         retval = [[face
                    for face in faces
-                   if (face.w * square_root_two >= self.min_size)]
+                   if (face.w >= 32.0)]
                   for faces in detected_faces]
         return retval
 

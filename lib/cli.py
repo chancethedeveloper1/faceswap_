@@ -625,17 +625,6 @@ class ExtractArgs(ExtractConvertArgs):
                     "increments of that size up to 360, or pass in a list of numbers to enumerate "
                     "exactly what angles to check."})
         argument_list.append({
-            "opts": ("-min", "--min-size"),
-            "type": int,
-            "action": Slider,
-            "dest": "min_size",
-            "min_max": (0, 1080),
-            "default": 0,
-            "rounding": 20,
-            "group": "Face Processing",
-            "help": "Filters out faces detected below this size. Length, in pixels across the "
-                    "diagonal of the bounding box. Set to 0 for off"})
-        argument_list.append({
             "opts": ("-n", "--nfilter"),
             "action": FilesFullPaths,
             "filetypes": "image",

@@ -48,10 +48,6 @@ class Extractor():
         to use increments of that size up to 360, or pass in a ``list`` of ``ints`` to enumerate
         exactly what angles to check. Can also pass in ``'on'`` to increment at 90 degree
         intervals. Default: ``None``
-    min_size: int, optional
-        Used to set the :attr:`plugins.extract.detect.min_size` attribute Filters out faces
-        detected below this size. Length, in pixels across the diagonal of the bounding box. Set
-        to ``0`` for off. Default: ``0``
     normalize_method: {`None`, 'clahe', 'hist', 'mean'}, optional
         Used to set the :attr:`plugins.extract.align.normalize_method` attribute. Normalize the
         images fed to the aligner.Default: ``None``
@@ -65,21 +61,20 @@ class Extractor():
         The current phase that the pipeline is running. Used in conjunction with :attr:`passes` and
         :attr:`final_pass` to indicate to the caller which phase is being processed
     """
-    def __init__(self, detector, aligner, masker, configfile=None,
-                 multiprocess=False, rotate_images=None, min_size=20,
-                 normalize_method=None, image_is_aligned=False):
-        logger.debug("Initializing %s: (detector: %s, aligner: %s, masker: %s, "
-                     "configfile: %s, multiprocess: %s, rotate_images: %s, min_size: %s, "
-                     "normalize_method: %s, image_is_aligned: %s)",
+    def __init__(self, detector, aligner, masker, configfile=None, multiprocess=False,
+                 rotate_images=None, normalize_method=None, image_is_aligned=False):
+        logger.debug("Initializing %s: (detector: %s, aligner: %s, masker: %s, configfile: %s, "
+                     "multiprocess: %s, rotate_images: %s, normalize_method: %s, "
+                     "image_is_aligned: %s)",
                      self.__class__.__name__, detector, aligner, masker, configfile,
-                     multiprocess, rotate_images, min_size, normalize_method, image_is_aligned)
+                     multiprocess, rotate_images, normalize_method, image_is_aligned)
         self._flow = self._set_flow(detector, aligner, masker)
         self.phase = self._flow[0]
         # We only ever need 1 item in each queue. This is 2 items cached (1 in queue 1 waiting
         # for queue) at each point. Adding more just stacks RAM with no speed benefit.
         self._queue_size = 1
         self._vram_buffer = 256  # Leave a buffer for VRAM allocation
-        self._detect = self._load_detect(detector, rotate_images, min_size, configfile)
+        self._detect = self._load_detect(detector, rotate_images, configfile)
         self._align = self._load_align(aligner, configfile, normalize_method)
         self._mask = self._load_mask(masker, image_is_aligned, configfile)
         self._is_parallel = self._set_parallel_processing(multiprocess)
@@ -371,7 +366,7 @@ class Extractor():
         return aligner
 
     @staticmethod
-    def _load_detect(detector, rotation, min_size, configfile):
+    def _load_detect(detector, rotation, configfile):
         """ Set global arguments and load detector plugin """
         if detector is None or detector.lower() == "none":
             logger.debug("No detector selected. Returning None")
@@ -379,7 +374,6 @@ class Extractor():
         detector_name = detector.replace("-", "_").lower()
         logger.debug("Loading Detector: '%s'", detector_name)
         detector = PluginLoader.get_detector(detector_name)(rotation=rotation,
-                                                            min_size=min_size,
                                                             configfile=configfile)
         return detector
 
