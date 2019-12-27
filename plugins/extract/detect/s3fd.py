@@ -301,7 +301,7 @@ class S3fd(KSession):
 
             max_of_xy = np.maximum(boxes[best, :2], boxes[rest, :2])
             min_of_xy = np.minimum(boxes[best, 2:4], boxes[rest, 2:4])
-            width_height = np.maximum(0, min_of_xy - max_of_xy + 1)
+            width_height = np.maximum(0.0, min_of_xy - max_of_xy + 1)
             intersection_areas = width_height[:, 0] * width_height[:, 1]
             iou = intersection_areas / (areas[best] + areas[rest] - intersection_areas)
 
@@ -312,6 +312,6 @@ class S3fd(KSession):
                 boxes[best, :4] = vote
             retained_box_indices.append(best)
 
-            non_overlapping_boxes = (iou <= threshold).nonzero()[0]
-            ranked_indices = ranked_indices[non_overlapping_boxes + 1]
+            remaining_boxes = (iou <= threshold).nonzero()[0]
+            ranked_indices = ranked_indices[remaining_boxes + 1]
         return boxes[retained_box_indices]
