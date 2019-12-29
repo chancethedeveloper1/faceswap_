@@ -280,10 +280,9 @@ class Detector(Extractor):  # pylint:disable=abstract-method
 
     def _filter_small_faces(self, detected_faces):
         """ Filter out any faces smaller than the min size threshold """
-        square_root_two = 2.0 ** 0.5
         retval = [[face
                    for face in faces
-                   if (face.w * square_root_two >= self.min_size)]
+                   if (face.w >= self.min_size)]
                   for faces in detected_faces]
         return retval
 
@@ -401,3 +400,131 @@ class Detector(Extractor):  # pylint:disable=abstract-method
             image = np.moveaxis(image, 2, 0)
 
         return image, rotation_matrix
+
+    @staticmethod
+    def crop_and_resize(src_image, dst_image_size, coordinates, sub_pixel=True):
+        """ Crop an image and resize the cropped section with various methods
+
+        Parameters
+        ----------
+        src_image: :class:`numpy.ndarry`
+            Source image in float32
+        dst_image_size: tuple of ints
+            Desired image size (x pixels, then y pixels) in p
+            ixels of the resulting resized image
+        coordinates: :class:`numpy.ndarry`
+            Array of shape Nx5 with the cooridinates of a bounding box's vertices
+        sub_pixel: bool
+            Uses re-map to resize images that are not aligned on a pixel grid
+
+        Returns
+        -------
+        scaled_img: :class:`numpy.ndarry`
+            The cropped and resized source image
+        """
+        if sub_pixel:
+            x_map, y_map = np.meshgrid(np.linspace(coordinates[0], coordinates[2], dst_image_size[0]),
+                                       np.linspace(coordinates[1], coordinates[3], dst_image_size[1]))
+            x_map, y_map = x_map.astype(np.float32), y_map.astype(np.float32)
+            scaled_img = cv2.remap(src_image, x_map, y_map, interpolation=cv2.INTER_AREA)
+            # scaled_img = ndimage.map_coordinates(src_image, [x_map, y_map], order=1)
+        else:
+            int_rect = np.rint(coordinates).astype(np.uint32)
+            cropped_img = src_image[int_rect[1]:int_rect[3], int_rect[0]:int_rect[2]]
+            scaled_img = cv2.resize(cropped_img,
+                                    (dst_image_size[0], dst_image_size[1]),
+                                    interpolation=cv2.INTER_AREA)
+        return scaled_img
+
+    @staticmethod
+    def nms(boxes, threshold, method='iou'):
+        """ Perform Non-Maximum Suppression. Filters multiple overlapping boxes returned by the NN
+        into a single box with the highest confidence
+
+        Parameters
+        ----------
+        boxes: :class:`numpy.ndarry`
+            Array of shape Nx5, with
+                the first axis contains the number of bounding box candidates
+                the second axis is comprised of 5 items
+                    x-coordinate of left side of the rectangle
+                    y-coordinate of top side of the rectangle
+                    x-coordinate of right side of the rectangle
+                    y-coordinate of bottom side of the rectangle
+                    NN model's confidence of the bounding box rectangle's accuracy
+        threshold: float
+            Discard any box with a confidence score lower than threshold
+        method: str
+            Methodology in which to compute the overlapping metric
+
+        Returns
+        -------
+        boxes: :class:`numpy.ndarry`
+            Array of shape Nx5 with the same parameters as boxes
+        """
+        retained_box_indices = list()
+
+        areas = (boxes[:, 2] - boxes[:, 0] + 1) * (boxes[:, 3] - boxes[:, 1] + 1)
+        ranked_indices = boxes[:, 4].argsort()[::-1]
+        while ranked_indices.size > 0:
+            best = ranked_indices[0]
+            rest = ranked_indices[1:]
+
+            max_of_xy = np.maximum(boxes[best, :2], boxes[rest, :2])
+            min_of_xy = np.minimum(boxes[best, 2:4], boxes[rest, 2:4])
+            width_height = np.maximum(0, min_of_xy - max_of_xy + 1)
+            intersection_areas = width_height[:, 0] * width_height[:, 1]
+            if method == 'iom':
+                iou = intersection_areas / np.minimum(areas[best], areas[rest])
+            else:
+                iou = intersection_areas / (areas[best] + areas[rest] - intersection_areas)
+
+            overlapping_boxes = (iou > threshold).nonzero()[0]
+            if len(overlapping_boxes) != 0:
+                overlap_set = ranked_indices[overlapping_boxes + 1]
+                vote = np.average(boxes[overlap_set, :4], axis=0, weights=boxes[overlap_set, 4])
+                boxes[best, :4] = vote
+            retained_box_indices.append(best)
+
+            remaining_boxes = (iou <= threshold).nonzero()[0]
+            ranked_indices = ranked_indices[remaining_boxes + 1]
+        return boxes[retained_box_indices]
+
+    @staticmethod
+    def centered_square(rectangles, orig_image_shape):
+        """ Convert axis-parallel rectangles into axis-parallel squares centered at each rectangle's
+        center. Include error checking code to offset square if it goes outisde the image's size
+
+        Parameters
+        ----------
+        rectangles: :class:`numpy.ndarry`
+            Array of shape Nx5, with
+                the first axis contains the number of bounding box candidates
+                the second axis is comprised of 5 items
+                    x-coordinate of left side of the rectangle
+                    y-coordinate of top side of the rectangle
+                    x-coordinate of right side of the rectangle
+                    y-coordinate of bottom side of the rectangle
+                    NN model's confidence of the bounding box rectangle's accuracy
+        orig_image_shape: tuple of ints
+            tuple containing the original image's height and width in pixels
+
+        Returns
+        -------
+        squares: :class:`numpy.ndarry`
+            Array of shape Nx5 with the same parameters as rectangles
+        """
+        half_length = np.maximum(rectangles[:, 2] - rectangles[:, 0],
+                                 rectangles[:, 3] - rectangles[:, 1], dtype=np.float32) * 0.5
+        center_x = np.mean(rectangles[:, 0:3:2], dtype=np.float32, axis=1)
+        center_y = np.mean(rectangles[:, 1:4:2], dtype=np.float32, axis=1)
+
+        # correct if square would go out of bounds of the image's size
+        center_x = np.minimum(np.maximum(half_length, center_x), orig_image_shape[1] - half_length)
+        center_y = np.minimum(np.maximum(half_length, center_y), orig_image_shape[0] - half_length)
+
+        # move the center of the rectangle to the corrected center and calculate vertices
+        squares = np.stack([center_x, center_y, center_x, center_y, rectangles[:, 4]], axis=1)
+        offsets = np.stack([-half_length, -half_length, half_length, half_length], axis=1)
+        squares[:, 0:4] += offsets
+        return squares
