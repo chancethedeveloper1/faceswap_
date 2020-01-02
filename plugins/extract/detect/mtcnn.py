@@ -76,12 +76,7 @@ class Detect(Detector):
         """
         squares = self.first_stage(batch["feed"])
         squares = self.second_stage(batch["feed"], squares)
-        squares = self.third_stage(batch["feed"], squares)
-
-        batch["prediction"] = [square[:5] if square.size != 0 else np.empty((0, 5))
-                               for square in squares]
-        batch["mtcnn_points"] = [square[5:]  if square.size != 0 else np.empty((0, 5))
-                                 for square in squares]
+        batch["prediction"], batch["mtcnn_points"]  = self.third_stage(batch["feed"], squares)
 
         logger.trace("filename: %s, prediction: %s, landmarks: %s",
                      batch["filename"], batch["prediction"], batch["mtcnn_points"])
@@ -110,64 +105,48 @@ class Detect(Detector):
                                                  self.threshold[0])
                 boxes = self.nms(boxes, 0.5, "iou")
                 boxes = self.centered_square(boxes, self._image_size) # move to after second nms
-                squares[index].extend(boxes)
-        squares = [self.nms(np.stack(box_list), 0.7, 'iou') if box_list else np.empty((0, 5))
-                   for box_list in squares]
+                squares[index].append(boxes)
         return squares
 
-    def second_stage(self, image_batch, squares_batch):
+    def second_stage(self, images, squares_list):
         """ second stage - refinement of face candidates with rnet """
-        squares_list = []
-        for image, squares in zip(image_batch, squares_batch):
-            if squares.size == 0:
-                squares_list.append(squares)
-                continue
-            scaled_images = np.empty(((squares.shape[0],) + (24, 24, 3)), dtype=np.float32)
-            for index, square in enumerate(squares):
-                scaled_images[index] = self.crop_and_resize(image, (24, 24), square[0:4], True)
-            classifer, regression = self.r_net.predict(scaled_images, batch_size=256)
-            boxes = self.process_results(classifer[:, 1],
-                                         regression,
-                                         None,
-                                         squares,
-                                         self.threshold[1],
-                                         2)
-            boxes = self.nms(boxes, 0.7, 'iou')
-            squares = self.centered_square(boxes, self._image_size)
-            squares_list.append(squares)
+        for index, (image, squares) in enumerate(zip(images, squares_list)):
+            squares_batch = np.concatenate(squares, axis=0)
+            if squares_batch.shape[0] != 0:
+                squares_batch = self.nms(squares_batch, 0.5, 'iou')
+                image_batch = np.stack([self.crop_and_resize(image, (24, 24), square[0:4], False)
+                                        for square in squares_batch], axis=0)
+                classifer, regression = self.r_net.predict(image_batch, batch_size=256)
+                boxes = self.process_results(classifer[:, 1],
+                                             regression,
+                                             None,
+                                             squares_batch,
+                                             self.threshold[1],
+                                             2)
+                boxes = self.nms(boxes, 0.5, 'iou')
+                squares_batch = self.centered_square(boxes, self._image_size)
+            squares_list[index] = squares_batch
         return squares_list
 
-    def third_stage(self, image_batch, squares_batch):
+    def third_stage(self, images, squares_list):
         """ third stage - further refinement and facial landmarks positions with onet """
-        squares_list = []
-        for image, squares in zip(image_batch, squares_batch):
-            if squares.size == 0:
-                squares_list.append(squares)
-                continue
-            scaled_images = np.empty(((squares.shape[0],) + (48, 48, 3)), dtype=np.float32)
-            for index, square in enumerate(squares):
-                scaled_images[index] = self.crop_and_resize(image, (48, 48), square[0:4], True)
-            scores, offsets, landmarks = self.o_net.predict(scaled_images, batch_size=256)
-            boxes = self.process_results(scores[:, 1],
-                                         offsets,
-                                         landmarks,
-                                         squares,
-                                         self.threshold[2],
-                                         3)
-            boxes = self.nms(boxes, 0.7, 'iom')
-            squares = self.centered_square(boxes, self._image_size)
-            squares_list.append(squares)
-        return squares_list
-
-    def aggregate_batches(self, images, list_of_squares):
-        """ blah """
-        image_list, square_list = [], []
-        for image, squares in zip(images, list_of_squares):
-            if squares is not None:
-                for square in squares:
-                    image_list.append(self.crop_and_resize(image, (48, 48), square[0:4], True))
-                square_list.extend(squares)
-        return image_list, square_list
+        points_list = []
+        for index, (image, squares_batch) in enumerate(zip(images, squares_list)):
+            if squares_batch.shape[0] != 0:
+                image_batch = np.stack([self.crop_and_resize(image, (48, 48), square[0:4], False)
+                                        for square in squares_batch], axis=0)
+                scores, offsets, landmarks = self.o_net.predict(image_batch, batch_size=64)
+                boxes = self.process_results(scores[:, 1],
+                                             offsets,
+                                             landmarks,
+                                             squares_batch,
+                                             self.threshold[2],
+                                             3)
+                boxes = self.nms(boxes, 0.5, 'iom')
+                squares_batch = self.centered_square(boxes, self._image_size)
+            squares_list[index] = squares_batch[:, :5]
+            points_list.append(squares_batch[:, 5:])
+        return squares_list, points_list
 
     @staticmethod
     def process_first_stage(classifer, regression, stride, scale, threshold):
@@ -214,7 +193,7 @@ class Detect(Detector):
         rects: :class:`numpy.ndarry`
             Array of shape Nx5 or Nx15 containing the rectangles vertices and face landmarks
         """
-        confident_boxes = face_classifer >= threshold
+        confident_boxes = np.nonzero(face_classifer >= threshold)
         rects = squares[confident_boxes]
 
         width_height = np.stack([rects[:, 2] - rects[:, 0], rects[:, 3] - rects[:, 1]], axis=1)
@@ -225,8 +204,8 @@ class Detect(Detector):
         rects[:, 4] = face_classifer[confident_boxes]
 
         if stage == 3:
-            x_landmarks = (landmarks[confident_boxes, 0:5] * width_height[:, 0:1] + rects[:, 0:1])
-            y_landmarks = (landmarks[confident_boxes, 5:10] * width_height[:, 1:2] + rects[:, 1:2])
+            x_landmarks = (landmarks[confident_boxes[0], 0:5] * width_height[:, 0:1] + rects[:, 0:1])
+            y_landmarks = (landmarks[confident_boxes[0], 5:10] * width_height[:, 1:2] + rects[:, 1:2])
             rects = np.concatenate([rects,
                                     x_landmarks[:, 0:1], y_landmarks[:, 0:1],
                                     x_landmarks[:, 1:2], y_landmarks[:, 1:2],
