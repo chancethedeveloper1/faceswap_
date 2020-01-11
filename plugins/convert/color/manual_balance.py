@@ -1,49 +1,50 @@
 #!/usr/bin/env python3
 """ Manual Balance colour adjustment plugin for faceswap.py converter """
 
-import cv2
 import numpy as np
 from ._base import Adjustment
 
 
 class Color(Adjustment):
-    """ Adjust the mean of the color channels to be the same for the swap and old frame """
+    """ Color distribution adjustment """
 
     def process(self, old_face, new_face, raw_mask):
-        image = self.convert_colorspace(new_face * 255.0)
-        adjustment = np.array([self.config["balance_1"] / 100.0,
-                               self.config["balance_2"] / 100.0,
-                               self.config["balance_3"] / 100.0]).astype("float32")
-        for idx in range(3):
-            if adjustment[idx] >= 0:
-                image[:, :, idx] = ((1 - image[:, :, idx]) * adjustment[idx]) + image[:, :, idx]
-            else:
-                image[:, :, idx] = image[:, :, idx] * (1 + adjustment[idx])
-
-        image = self.convert_colorspace(image * 255.0, to_bgr=True)
-        image = self.adjust_contrast(image)
-        return image
-
-    def adjust_contrast(self, image):
         """
-        Adjust image contrast and brightness.
-        """
-        contrast = max(-126, int(round(self.config["contrast"] * 1.27)))
-        brightness = max(-126, int(round(self.config["brightness"] * 1.27)))
+        Shift the color distribution of the swapped facial crop by an user input amount.
 
-        if not contrast and not brightness:
+        Parameters:
+        -------
+        old_face : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the original subject
+        new_face : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the swapped output from the neural network
+        raw_mask : Numpy array, shape (height, width, n_channels), float32
+            Segmentation mask of the facial crop of the original subject
+
+        Returns:
+        -------
+        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the swapped output with a shifted color distribution
+        """
+        adjustment = np.array([self.config["balance_1"],
+                               self.config["balance_2"],
+                               self.config["balance_3"]])[None, None, :].astype("float32") / 100.0
+        pos_mask = (new_face >= 0.0)
+        neg_mask = ~pos_mask
+        new_face[pos_mask] = ((1.0 - new_face[pos_mask]) * adjustment) + new_face[pos_mask]
+        new_face[neg_mask] = new_face[neg_mask] * (1.0 + adjustment)
+        new_face_shifted = self._adjust_contrast(new_face)
+        return new_face_shifted
+
+    def _adjust_contrast(self, image):
+        """ Adjust image's contrast and brightness. """
+        if not self.config["contrast"] and not self.config["brightness"]:
             return image
 
-        image = np.rint(image * 255.0).astype("uint8")
-        image = np.clip(image * (contrast/127+1) - contrast + brightness, 0, 255)
-        image = np.clip(np.divide(image, 255, dtype=np.float32), .0, 1.0)
-        return image
-
-    def convert_colorspace(self, new_face, to_bgr=False):
-        """ Convert colorspace based on mode or back to bgr """
-        mode = self.config["colorspace"].lower()
-        colorspace = "YCrCb" if mode == "ycrcb" else mode.upper()
-        conversion = "{}2BGR".format(colorspace) if to_bgr else "BGR2{}".format(colorspace)
-        image = cv2.cvtColor(new_face.astype("uint8"),  # pylint: disable=no-member
-                             getattr(cv2, "COLOR_{}".format(conversion))).astype("float32") / 255.0
+        contrast = max(-126.0, self.config["contrast"] * 1.27)
+        brightness = max(-126.0, self.config["brightness"] * 1.27)
+        adj_brightness = brightness - contrast
+        adj_contrast = contrast / 127.0 + 1.0
+        image *= adj_contrast
+        image += adj_brightness
         return image

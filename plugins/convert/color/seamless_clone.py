@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-""" Seamless clone adjustment plugin for faceswap.py converter
-    NB: This probably isn't the best place for this, but it is independent of
-        color adjustments and does not have a natural home, so here for now
-        and called as an extra plugin from lib/convert.py
-"""
+""" Seamless clone adjustment plugin for faceswap.py converter """
 
 import cv2
 import numpy as np
@@ -11,13 +7,29 @@ from ._base import Adjustment
 
 
 class Color(Adjustment):
-    """ Seamless clone the swapped face into the old face with cv2
-        NB: This probably isn't the best place for this, but it doesn't work well and
-        and does not have a natural home, so here for now.
-    """
+    """ Poisson Blending of colors along mask boundary """
 
     @staticmethod
     def process(old_face, new_face, raw_mask):
+        """
+        Seamlessly merge the swapped facial crop into the original facial crop using Poisson
+        Blending. The colors along the segmentation mask boundary will be shifted to produce
+        a continious transition.
+
+        Parameters:
+        -------
+        old_face : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the original subject
+        new_face : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the swapped output from the neural network
+        raw_mask : Numpy array, shape (height, width, n_channels), float32
+            Segmentation mask of the facial crop of the original subject
+
+        Returns:
+        -------
+        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+            Facial crop of the swapped output with a shifted color distribution
+        """
         height, width, _ = old_face.shape
         height = height // 2
         width = width // 2
@@ -35,11 +47,10 @@ class Color(Adjustment):
                                ((height, height), (width, width), (0, 0)),
                                'constant')).astype("uint8")
 
-        blended = cv2.seamlessClone(insertion,  # pylint: disable=no-member
+        new_face_shifted = cv2.seamlessClone(insertion,
                                     prior,
                                     insertion_mask,
                                     (x_center, y_center),
-                                    cv2.NORMAL_CLONE)  # pylint: disable=no-member
-        blended = blended[height:-height, width:-width]
-
-        return blended.astype("float32") / 255.0
+                                    cv2.NORMAL_CLONE)
+        new_face_shifted = new_face_shifted[height:-height, width:-width].astype("float32") / 255.0
+        return new_face_shifted

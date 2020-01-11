@@ -45,6 +45,21 @@ _HELPTEXT = "Options for manually altering the balance of colors of the swapped 
 
 
 _DEFAULTS = {
+    "clip": {
+        "default": True,
+        "info": "Should components of L*a*b* image be scaled by np.clip before converting "
+                "back to BGR color space?\nIf False then components will be min-max scaled "
+                "appropriately.\nClipping will keep target image brightness truer to the "
+                "input.\nScaling will adjust image brightness to avoid washed out portions in "
+                "the resulting color transfer that can be caused by clipping.",
+        "datatype": bool,
+        "group": "method",
+        "rounding": None,
+        "min_max": None,
+        "choices": [],
+        "gui_radio": False,
+        "fixed": True,
+    },
     "colorspace": {
         "default": "HSV",
         "info": "The colorspace to use for adjustment: The three adjustment sliders will "
