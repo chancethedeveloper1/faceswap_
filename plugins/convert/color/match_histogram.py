@@ -36,6 +36,7 @@ class Color(Adjustment):
                                                           new_face[:, :, color_channel],
                                                           mask_indices,
                                                           threshold)
+        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
         return new_face_shifted
 
     @staticmethod

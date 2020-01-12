@@ -783,25 +783,31 @@ class ConvertArgs(ExtractConvertArgs):
             "type": str.lower,
             "dest": "color_adjustment",
             "choices": PluginLoader.get_available_convert_plugins("color", True),
-            "default": "avg-color",
+            "default": "variance-transfer",
             "group": "plugins",
             "help": "R|Performs color adjustment to the swapped face. Some of these options have "
                     "configurable settings in '/config/convert.ini' or 'Settings > Configure "
                     "Convert Plugins':"
-                    "\nL|avg-color: Adjust the mean of each color channel in the swapped "
-                    "reconstruction to equal the mean of the masked area in the original image."
-                    "\nL|color-transfer: Transfers the color distribution from the source to the "
-                    "target image using the mean and standard deviations of the L*a*b* "
-                    "color space."
+                    "\nL|match-mean: Adjust the mean of each color channel's masked area "
+                    "in the swapped reconstruction to match the mean of the masked area in the "
+                    "original image."
+                    "\nL|match-variance: Adjust the mean & variance of each color channel's "
+                    "masked area in the swapped reconstruction to match the mean & variance of "
+                    "the masked area in the original image."
+                    "\nL|match-skew: Adjust the distribution of each color channel's "
+                    "masked area in the swapped reconstruction to match the distribution of "
+                    "the masked area in the original image. Optimizes a lambda parameter per "
+                    "channel to utilize in a Yeo-Johnson power transform. Slower but most "
+                    "accurate."
                     "\nL|manual-balance: Manually adjust the balance of the image in a variety of "
                     "color spaces. Best used with the Preview tool to set correct values."
-                    "\nL|match-hist: Adjust the histogram of each color channel in the swapped "
-                    "reconstruction to equal the histogram of the masked area in the original "
-                    "image."
+                    "\nL|match-histogram: Adjust the histogram of each color channel's masked "
+                    "area in the swapped reconstruction to match the histogram of the masked area "
+                    "in the original image."
                     "\nL|seamless-clone: Use cv2's seamless clone function to remove extreme "
                     "gradients at the mask seam by smoothing colors. Generally does not give "
                     "very satisfactory results."
-                    "\nL|none: Don't perform color adjustment."})
+                    "\nL|none: Do not perform any color adjustment of model output."})
         argument_list.append({
             "opts": ("-M", "--mask-type"),
             "action": Radio,

@@ -28,12 +28,13 @@ class Color(Adjustment):
         """
         adjustment = np.array([self.config["balance_1"],
                                self.config["balance_2"],
-                               self.config["balance_3"]])[None, None, :].astype("float32") / 100.0
+                               self.config["balance_3"]])[None, None, :]
         pos_mask = (new_face >= 0.0)
         neg_mask = ~pos_mask
         new_face[pos_mask] = ((1.0 - new_face[pos_mask]) * adjustment) + new_face[pos_mask]
         new_face[neg_mask] = new_face[neg_mask] * (1.0 + adjustment)
         new_face_shifted = self._adjust_contrast(new_face)
+        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
         return new_face_shifted
 
     def _adjust_contrast(self, image):
@@ -41,8 +42,8 @@ class Color(Adjustment):
         if not self.config["contrast"] and not self.config["brightness"]:
             return image
 
-        contrast = max(-126.0, self.config["contrast"] * 1.27)
-        brightness = max(-126.0, self.config["brightness"] * 1.27)
+        contrast = max(-126.0, self.config["contrast"] * 127.0)
+        brightness = max(-126.0, self.config["brightness"] * 127.0)
         adj_brightness = brightness - contrast
         adj_contrast = contrast / 127.0 + 1.0
         image *= adj_contrast

@@ -62,8 +62,8 @@ class Adjustment():
 
     def convert_colorspace(self, new_face, to_bgr=False):
         """ Convert colorspace based on mode or back to BGR """
-        mode = self.config["colorspace"].upper()
-        colorspace = "YCrCb" if mode == "YCRCB" else mode
+        mode = self.config.get("colorspace", "Lab")
+        colorspace = "YCrCb" if mode == "Ycrcb" else mode.upper()
         conversion = "{}2BGR".format(colorspace) if to_bgr else "BGR2{}".format(colorspace)
         image = batch_convert_color(new_face, colorspace)
         return image
@@ -82,12 +82,24 @@ class Adjustment():
         image : Numpy array, shape (height, width, n_channels), float32
             Image data within the 0.0 to 1.0 range
         """
-        if self.config.get("clip", True):
+        mode = self.config.get("clip", "clip")
+        if mode == "clip":
             np.clip(image, 0.0, 1.0, out=image)
+        elif mode == "scale":
+            image_min = np.amin(image, axis=(0, 1))
+            image_max = np.amax(image, axis=(0, 1))
+            image_min_clipped = np.maximum(image_min, [0.0])
+            image_max_clipped = np.minimum(image_max, [1.0])
+
+            scale_mask = (image_min < image_min_clipped | image_max > image_max_clipped)
+            clip_range = image_max_clipped[scale_mask] - image_min_clipped[scale_mask]
+            img_range = image_max[scale_mask] - image_min[scale_mask]
+            img_adjust = image[scale_mask] - image_min[scale_mask]
+            image[scale_mask] = clip_range * img_adjust / img_range + image_min_clipped[scale_mask]
+        elif mode == "none":
+            logger.trace("No overflow adjustment. Typically only used for raw data output.")
+            # TODO parse convert code for clips. Preferable to use single scale/clip at end.
+            # instead of the clip here in color...
         else:
-            image_min = np.min(image, axis=(0, 1))
-            image_max = np.max(image, axis=(0, 1))
-            scale_mask = (image_min < 0.0 | image_max > 1.0)
-            scale_factor = image_max[scale_mask] - image_min[scale_mask]
-            image[scale_mask] = (image[scale_mask] - image_min[scale_mask]) / scale_factor
+            logger.trace("Insert Faceswap Error code here")
         return image

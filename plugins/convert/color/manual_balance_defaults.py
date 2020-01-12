@@ -45,114 +45,72 @@ _HELPTEXT = "Options for manually altering the balance of colors of the swapped 
 
 
 _DEFAULTS = {
-    "clip": {
-        "default": True,
-        "info": "Should components of L*a*b* image be scaled by np.clip before converting "
-                "back to BGR color space?\nIf False then components will be min-max scaled "
-                "appropriately.\nClipping will keep target image brightness truer to the "
-                "input.\nScaling will adjust image brightness to avoid washed out portions in "
-                "the resulting color transfer that can be caused by clipping.",
-        "datatype": bool,
-        "group": "method",
-        "rounding": None,
-        "min_max": None,
-        "choices": [],
-        "gui_radio": False,
-        "fixed": True,
-    },
-    "colorspace": {
-        "default": "HSV",
-        "info": "The colorspace to use for adjustment: The three adjustment sliders will "
-                "effect the image differently depending on which colorspace is selected:"
-                "\n\t RGB: Red, Green, Blue. An additive colorspace where colors are obtained "
-                "by a linear combination of Red, Green, and Blue values. The three channels "
-                "are correlated by the amount of light hitting the surface. In RGB color "
-                "space the color information is separated into three channels but the same "
-                "three channels also encode brightness information."
-                "\n\t HSV: Hue, Saturation, Value. Hue - Dominant wavelength. Saturation - "
-                "Purity / shades of color. Value - Intensity. Best thing is that it uses only "
-                "one channel to describe color (H), making it very intuitive to specify color."
-                "\n\t LAB: Lightness, A, B. Lightness - Intensity. A - Color range from green "
-                "to magenta. B - Color range from blue to yellow. The L channel is "
-                "independent of color information and encodes brightness only. The other two "
-                "channels encode color."
-                "\n\t YCrCb: Y - Luminance or Luma component obtained from RGB after gamma "
-                "correction. Cr - how far is the red component from Luma. Cb - how far is the "
-                "blue component from Luma. Separates the luminance and chrominance components "
-                "into different channels.",
-        "datatype": str,
-        "rounding": None,
-        "min_max": None,
-        "group": "color balance",
-        "choices": ["RGB", "HSV", "LAB", "YCrCb"],
-        "gui_radio": True,
-        "fixed": True,
-    },
     "balance_1": {
         "default": 0.0,
-        "info": "Balance of channel 1:"
+        "info": "Adjustment factor for the 1st channel:"
                 "\n\tRGB: Red"
                 "\n\tHSV: Hue"
                 "\n\tLAB: Lightness"
-                "\n\tYCrCb: Luma",
+                "\n\tYCrCb: Luma"
+                "\n\nThis slider will effect the image differently depending on which colorspace "
+                "is selected in the global settings.\n",
         "datatype": float,
-        "rounding": 1,
-        "min_max": (-100.0, 100.0),
-        "choices": [],
-        "group": "color balance",
-        "gui_radio": False,
+        "rounding": 3,
+        "min_max": (-1.000, 1.000),
+        "gui_radio": True,
         "fixed": True,
+        "group": "color balance",
     },
     "balance_2": {
         "default": 0.0,
-        "info": "Balance of channel 2:"
+        "info": "Adjustment factor for the 2nd channel:"
                 "\n\tRGB: Green"
                 "\n\tHSV: Saturation"
-                "\n\tLAB: Green > Magenta"
-                "\n\tYCrCb: Distance of red from Luma",
+                "\n\tLAB: Green -> Magenta"
+                "\n\tYCrCb: Distance of red from Luma"
+                "\n\nThis slider will effect the image differently depending on which colorspace "
+                "is selected in the global settings.\n",
         "datatype": float,
-        "rounding": 1,
-        "min_max": (-100.0, 100.0),
-        "choices": [],
+        "rounding": 3,
+        "min_max": (-1.000, 1.000),
         "gui_radio": False,
-        "group": "color balance",
         "fixed": True,
+        "group": "color balance",
     },
     "balance_3": {
         "default": 0.0,
-        "info": "Balance of channel 3:"
+        "info": "Adjustment factor for the 3rd channel:"
                 "\n\tRGB: Blue"
                 "\n\tHSV: Intensity"
-                "\n\tLAB: Blue > Yellow"
-                "\n\tYCrCb: Distance of blue from Luma",
+                "\n\tLAB: Blue -> Yellow"
+                "\n\tYCrCb: Distance of blue from Luma"
+                "\n\nThis slider will effect the image differently depending on which colorspace "
+                "is selected in the global settings.\n",
         "datatype": float,
-        "rounding": 1,
-        "min_max": (-100.0, 100.0),
-        "choices": [],
+        "rounding": 3,
+        "min_max": (-1.000, 1.000),
         "gui_radio": False,
-        "group": "color balance",
         "fixed": True,
+        "group": "color balance",
     },
     "contrast": {
         "default": 0.0,
-        "info": "Amount of contrast applied.",
+        "info": "Amount of contrast applied.\n",
         "datatype": float,
-        "rounding": 1,
-        "min_max": (-100.0, 100.0),
-        "choices": [],
+        "rounding": 3,
+        "min_max": (-1.000, 1.000),
         "gui_radio": False,
-        "group": "brightness contrast",
         "fixed": True,
+        "group": "brightness contrast",
     },
     "brightness": {
         "default": 0.0,
-        "info": "Amount of brighness applied.",
+        "info": "Amount of brighness applied.\n",
         "datatype": float,
-        "rounding": 1,
-        "min_max": (-100.0, 100.0),
-        "choices": [],
+        "rounding": 3,
+        "min_max": (-1.000, 1.000),
         "gui_radio": False,
-        "group": "brightness contrast",
         "fixed": True,
+        "group": "brightness contrast",
     },
 }

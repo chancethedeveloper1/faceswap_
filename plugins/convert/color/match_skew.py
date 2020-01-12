@@ -34,6 +34,7 @@ class Color(Adjustment):
 
         normalized_swaps = self._yeo_johnson_transform(new_face, swapped_lambdas)
         new_face_shifted = self._yeo_johnson_inverse_transform(normalized_swaps, source_lambdas)
+        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
 
         return new_face_shifted
 
