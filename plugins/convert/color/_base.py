@@ -4,6 +4,7 @@
 import logging
 import numpy as np
 
+from lib.image import batch_convert_color
 from plugins.convert._config import Config
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -35,7 +36,7 @@ class Adjustment():
         logger.debug("Config: %s", retval)
         return retval
 
-    def process(self, old_face, new_face, raw_mask, clip):
+    def process(self, old_face, new_face, raw_mask):
         """ Override for specific color adjustment process """
         raise NotImplementedError
 
@@ -49,11 +50,12 @@ class Adjustment():
             final_mask = new_face[:, :, -1:]
             new_face = new_face[:, :, :3]
 
-        old_face_color = self.convert_colorspace(old_face, to_bgr=False)
-        new_face_color  = self.convert_colorspace(new_face, to_bgr=False)
-        new_face_shifted = self.process(old_face_color, new_face_color, raw_mask)
+        old_face_color = self.convert_colorspace(old_face[None, ...], to_bgr=False)
+        new_face_color = self.convert_colorspace(new_face[None, ...], to_bgr=False)
+        mask = np.concatenate((raw_mask, raw_mask, raw_mask), axis=-1)[None, ...]
+        new_face_shifted = self.process(old_face_color, new_face_color, mask)
         new_face_shifted = self.convert_colorspace(new_face_shifted, to_bgr=True)
-        new_face_shifted = self.clip_image(new_face_shifted)
+        new_face_shifted = self.clip_image(new_face_shifted)[0]
 
         if reinsert_mask and new_face.shape[2] != 4:
             new_face_shifted = np.concatenate((new_face_shifted, final_mask), axis=-1)
@@ -65,7 +67,7 @@ class Adjustment():
         mode = self.config.get("colorspace", "Lab")
         colorspace = "YCrCb" if mode == "Ycrcb" else mode.upper()
         conversion = "{}2BGR".format(colorspace) if to_bgr else "BGR2{}".format(colorspace)
-        image = batch_convert_color(new_face, colorspace)
+        image = batch_convert_color(new_face, conversion)
         return image
 
     def clip_image(self, image):
@@ -86,8 +88,8 @@ class Adjustment():
         if mode == "clip":
             np.clip(image, 0.0, 1.0, out=image)
         elif mode == "scale":
-            image_min = np.amin(image, axis=(0, 1))
-            image_max = np.amax(image, axis=(0, 1))
+            image_min = np.amin(image, axis=(1, 2))
+            image_max = np.amax(image, axis=(1, 2))
             image_min_clipped = np.maximum(image_min, [0.0])
             image_max_clipped = np.minimum(image_max, [1.0])
 
@@ -98,8 +100,8 @@ class Adjustment():
             image[scale_mask] = clip_range * img_adjust / img_range + image_min_clipped[scale_mask]
         elif mode == "none":
             logger.trace("No overflow adjustment. Typically only used for raw data output.")
-            # TODO parse convert code for clips. Preferable to use single scale/clip at end.
-            # instead of the clip here in color...
+            # TODO parse entire convert code for clips. Preferable to use single scale/clip at end.
+            # instead of the clip here in color and elsewhere...
         else:
             logger.trace("Insert Faceswap Error code here")
         return image

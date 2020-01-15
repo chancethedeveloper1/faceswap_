@@ -783,7 +783,7 @@ class ConvertArgs(ExtractConvertArgs):
             "type": str.lower,
             "dest": "color_adjustment",
             "choices": PluginLoader.get_available_convert_plugins("color", True),
-            "default": "variance-transfer",
+            "default": "match-variance",
             "group": "plugins",
             "help": "R|Performs color adjustment to the swapped face. Some of these options have "
                     "configurable settings in '/config/convert.ini' or 'Settings > Configure "

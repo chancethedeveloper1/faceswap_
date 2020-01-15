@@ -14,27 +14,26 @@ class Color(Adjustment):
 
         Parameters:
         -------
-        old_face : Numpy array, shape (height, width, n_channels), float32
+        old_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the original subject
-        new_face : Numpy array, shape (height, width, n_channels), float32
+        new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (height, width, n_channels), float32
+        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
         -------
-        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+        new_face_shifted : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output with a shifted color distribution
         """
         adjustment = np.array([self.config["balance_1"],
                                self.config["balance_2"],
-                               self.config["balance_3"]])[None, None, :]
-        pos_mask = (new_face >= 0.0)
-        neg_mask = ~pos_mask
-        new_face[pos_mask] = ((1.0 - new_face[pos_mask]) * adjustment) + new_face[pos_mask]
-        new_face[neg_mask] = new_face[neg_mask] * (1.0 + adjustment)
+                               self.config["balance_3"]])[None, None, None, :]
+        pos_mask = np.nonzero(new_face >= 0.0)
+        neg_mask = np.nonzero(new_face < 0.0)
+        new_face[pos_mask] = ((1.0 - new_face) * adjustment + new_face)[pos_mask]
+        new_face[neg_mask] = (new_face * (1.0 + adjustment))[neg_mask]
         new_face_shifted = self._adjust_contrast(new_face)
-        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
         return new_face_shifted
 
     def _adjust_contrast(self, image):

@@ -16,27 +16,29 @@ class Color(Adjustment):
 
         Parameters:
         -------
-        old_face : Numpy array, shape (height, width, n_channels), float32
+        old_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the original subject
-        new_face : Numpy array, shape (height, width, n_channels), float32
+        new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (height, width, n_channels), float32
+        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
         -------
-        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+        new_face_shifted : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output with a shifted color distribution
         """
-        mask_indices = np.nonzero(raw_mask.squeeze())
-        threshold = self.config["threshold"] / 100.0
+        mask_indices = np.nonzero(np.squeeze(raw_mask.squeeze))
+        threshold = self.config["threshold"]
+        channels = range(new_face.shape[-1])
         new_face_shifted = np.empty_like(new_face)
-        for color_channel in [0,1,2]:
-            new_face_shifted [:, :, c] = self._hist_match(old_face[:, :, color_channel],
-                                                          new_face[:, :, color_channel],
-                                                          mask_indices,
-                                                          threshold)
-        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
+        for index, (old_img, new_img, mask) in enumerate(zip(old_face, new_face, raw_mask)):
+            mask_indices = np.nonzero(mask)
+            for channel in channels:
+                new_face_shifted[index, :, :, channel] = self._hist_match(old_img[:, :, channel],
+                                                                          new_img[:, :, channel],
+                                                                          mask_indices,
+                                                                          threshold)
         return new_face_shifted
 
     @staticmethod

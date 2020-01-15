@@ -22,25 +22,24 @@ class Color(Adjustment):
 
         Parameters:
         -------
-        old_face : Numpy array, shape (height, width, n_channels), float32
+        old_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the original subject
-        new_face : Numpy array, shape (height, width, n_channels), float32
+        new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (height, width, n_channels), float32
+        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
         -------
-        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+        new_face_shifted : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output with a shifted color distribution
         """
-        old_mean = np.average(old_face, axis=(0, 1), weights=raw_mask)
-        new_mean = np.average(new_face, axis=(0, 1), weights=raw_mask)
-        old_std = np.sqrt(np.average((old_face - old_mean)**2, axis=(0, 1), weights=raw_mask)
-        new_std = np.sqrt(np.average((new_face - new_mean)**2, axis=(0, 1), weights=raw_mask)
+        old_mean = np.average(old_face, axis=(1, 2), weights=raw_mask)
+        new_mean = np.average(new_face, axis=(1, 2), weights=raw_mask)
+        old_std = np.sqrt(np.average((old_face - old_mean)**2, axis=(1, 2), weights=raw_mask))
+        new_std = np.sqrt(np.average((new_face - new_mean)**2, axis=(1, 2), weights=raw_mask))
 
         # there is no "preserve paper" as Reinhard's math always uses (old_face_std / new_face_std)
         # must have been confusion due to the terminology of "source" and "target" in the paper
         new_face_shifted = (new_face - new_mean) * (old_std / new_std) + (old_mean)
-        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
         return new_face_shifted

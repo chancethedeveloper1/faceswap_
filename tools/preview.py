@@ -804,6 +804,7 @@ class ConfigTools():
     def sections(self):
         """ list: The sorted section names that exist within the convert Configuration options. """
         return sorted(set(plugin.split(".")[0] for plugin in self._config.config.sections()
+                          if plugin != "global"
                           if plugin.split(".")[0] != "writer"))
 
     @property
@@ -811,6 +812,7 @@ class ConfigTools():
         """ dict: Dictionary of configuration option sections as key with a list of containing
         plugins as the value """
         return {section: sorted([plugin.split(".")[1] for plugin in self._config.config.sections()
+                                 if plugin != "global"
                                  if plugin.split(".")[0] == section])
                 for section in self.sections}
 

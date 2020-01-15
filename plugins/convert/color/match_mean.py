@@ -16,20 +16,18 @@ class Color(Adjustment):
 
         Parameters:
         -------
-        old_face : Numpy array, shape (height, width, n_channels), float32
+        old_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the original subject
-        new_face : Numpy array, shape (height, width, n_channels), float32
+        new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (height, width, n_channels), float32
+        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
         -------
-        new_face_shifted : Numpy array, shape (height, width, n_channels), float32
+        new_face_shifted : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output with a shifted color distribution
         """
-        old_mean = np.average(old_face, axis=(0, 1), weights=raw_mask)
-        new_mean = np.average(new_face, axis=(0, 1), weights=raw_mask)
-        new_face_shifted = new_face + (old_mean - new_mean)
-        # new_face_shifted = new_face_shifted * raw_mask + new_face * (1.0 - raw_mask)
+        adjustment = np.average(old_face - new_face, axis=(1, 2), weights=raw_mask)
+        new_face_shifted = new_face + adjustment
         return new_face_shifted
