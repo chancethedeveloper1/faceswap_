@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-    The default options for the faceswap Manual_Balance Color plugin.
+    The default options for the faceswap Seamless_Clone Color plugin.
 
     Defaults files should be named <plugin_name>_defaults.py
     Any items placed into this file will automatically get added to the relevant config .ini files
@@ -41,7 +41,7 @@
 """
 
 
-_HELPTEXT = "Options for manually altering the balance of colors of the swapped face"
+_HELPTEXT = "Options for implemnting a Poisson Blending on the borders of the segmentation mask"
 
 
 _DEFAULTS = {
@@ -100,73 +100,5 @@ _DEFAULTS = {
         "min_max": None,
         "gui_radio": True,
         "fixed": True,
-    },
-    "balance_1": {
-        "default": 0.0,
-        "info": "Adjustment factor for the 1st channel:"
-                "\n\tRGB: Red"
-                "\n\tHSV: Hue"
-                "\n\tLAB: Lightness"
-                "\n\tYCrCb: Luma"
-                "\n\nThis slider will effect the image differently depending on which colorspace "
-                "is selected in the global settings.\n",
-        "datatype": float,
-        "rounding": 3,
-        "min_max": (-1.000, 1.000),
-        "gui_radio": True,
-        "fixed": True,
-        "group": "color balance",
-    },
-    "balance_2": {
-        "default": 0.0,
-        "info": "Adjustment factor for the 2nd channel:"
-                "\n\tRGB: Green"
-                "\n\tHSV: Saturation"
-                "\n\tLAB: Green -> Magenta"
-                "\n\tYCrCb: Distance of red from Luma"
-                "\n\nThis slider will effect the image differently depending on which colorspace "
-                "is selected in the global settings.\n",
-        "datatype": float,
-        "rounding": 3,
-        "min_max": (-1.000, 1.000),
-        "gui_radio": False,
-        "fixed": True,
-        "group": "color balance",
-    },
-    "balance_3": {
-        "default": 0.0,
-        "info": "Adjustment factor for the 3rd channel:"
-                "\n\tRGB: Blue"
-                "\n\tHSV: Intensity"
-                "\n\tLAB: Blue -> Yellow"
-                "\n\tYCrCb: Distance of blue from Luma"
-                "\n\nThis slider will effect the image differently depending on which colorspace "
-                "is selected in the global settings.\n",
-        "datatype": float,
-        "rounding": 3,
-        "min_max": (-1.000, 1.000),
-        "gui_radio": False,
-        "fixed": True,
-        "group": "color balance",
-    },
-    "contrast": {
-        "default": 0.0,
-        "info": "Amount of contrast applied.\n",
-        "datatype": float,
-        "rounding": 3,
-        "min_max": (-1.000, 1.000),
-        "gui_radio": False,
-        "fixed": True,
-        "group": "brightness contrast",
-    },
-    "brightness": {
-        "default": 0.0,
-        "info": "Amount of brighness applied.\n",
-        "datatype": float,
-        "rounding": 3,
-        "min_max": (-1.000, 1.000),
-        "gui_radio": False,
-        "fixed": True,
-        "group": "brightness contrast",
     },
 }

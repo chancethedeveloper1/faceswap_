@@ -45,6 +45,62 @@ _HELPTEXT = "Options for matching the histograms between the source and destinat
 
 
 _DEFAULTS = {
+    "colorspace": {
+        "default": "LAB",
+        "choices": ["RGB", "LAB", "HSV", "YCrCb"],
+        "info": "Transform neural network output into the above colorspace before "
+                "performing post-processing corrections."
+                "\n\t RGB: Red, Green, Blue. An additive colorspace consisting of a linear "
+                "combination of Red, Green, and Blue primaries. The color information is "
+                "separated into the three respective channels but brightness information "
+                "will be collectively encoded amongst the three correlated channels."
+                "\n\t LAB: Lightness, a, b"
+                " ... Lightness - Brightness intensity"
+                " ... A - Color range from green to red"
+                " ... B - Color range from blue to yellow"
+                " ... A transformation which is designed to approximate human vision. Aspires "
+                "to acheive perceptual uniformity as channel intensity values change. Uses a "
+                "single channel to describe brightness (L), making it very intuitive to specify "
+                "color brightness."
+                "\n\t HSV: Hue, Saturation, Value."
+                " ... Hue - Dominant wavelength or similiarity to a perceived color."
+                " ... Saturation - colorfulness of a shade relative to its own brightness."
+                " ... Value - brightness relative to the brightness of a similarly illuminated "
+                "white."
+                " ... A transformation which compromises between effectiveness for segmentation "
+                "and computational complexity. Uses a single channel to describe color (H), "
+                "making it very intuitive to specify color hue."
+                "\n\t YCrCb: Luma, Chroma red-differnce, Chroma blue-difference."
+                " ... Y - Luma component (weighted RGB without gamma correction)."
+                " ... Cr - Difference between the R channel and the Luma magnitude."
+                " ... Cb - Difference between the B channel and the Luma magnitude."
+                " ... ITU-R BT.601 conversion protocol without gamma correction. "
+                "A transformation commonly used in color video which seperates luminance and "
+                "chrominance components. Uses a single channel to describe luma (Y), "
+                "making it very intuitive to specify color brightness.",
+        "datatype": str,
+        "rounding": None,
+        "min_max": None,
+        "gui_radio": True,
+        "fixed": True,
+    },
+    "overflow correction": {
+        "default": "clip",
+        "choices": ["clip", "scale", "none"],
+        "info": "Post-processing will commonly adjust channel intensity values outside of the "
+                "bounds of the respective color space. The above methodolody will be used to "
+                "correct these overflow values."
+                "\n\tClip: Overflow values are clamped to the min or max allowed bounds."
+                "\n\tScale: The entire color channel is scaled to ensure the min or max values "
+                "do not overflow past their allowed bounds."
+                "\n\tNone: No correction of channel values is performed. Common image display "
+                "methods will likely interptret these overflow values incorrectly.",
+        "datatype": str,
+        "rounding": None,
+        "min_max": None,
+        "gui_radio": True,
+        "fixed": True,
+    },
     "threshold": {
         "default": 0.990,
         "info": "Adjust the threshold for histogram matching. Can reduce extreme colors "

@@ -28,7 +28,6 @@ class Color(Adjustment):
         new_face_shifted : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output with a shifted color distribution
         """
-        mask_indices = np.nonzero(np.squeeze(raw_mask.squeeze))
         threshold = self.config["threshold"]
         channels = range(new_face.shape[-1])
         new_face_shifted = np.empty_like(new_face)
