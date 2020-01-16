@@ -19,7 +19,7 @@ class Config(FaceswapConfig):
     def set_defaults(self):
         """ Set the default values for config """
         logger.debug("Setting defaults")
-        self.set_globals()
+        # self.set_globals()
         current_dir = os.path.dirname(__file__)
         for dirpath, _, filenames in os.walk(current_dir):
             default_files = [fname for fname in filenames if fname.endswith("_defaults.py")]

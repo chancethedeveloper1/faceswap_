@@ -3,7 +3,8 @@
 
 import logging
 import numpy as np
-
+import cv2
+from matplotlib import pyplot as plt
 from lib.image import batch_convert_color
 from plugins.convert._config import Config
 
@@ -36,11 +37,11 @@ class Adjustment():
         logger.debug("Config: %s", retval)
         return retval
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, raw_mask, color_method):
         """ Override for specific color adjustment process """
         raise NotImplementedError
 
-    def run(self, old_face, new_face, raw_mask):
+    def run(self, old_face, new_face, raw_mask, color_method):
         """ Perform selected adjustment on facial crops """
         logger.trace("Performing color adjustment")
         # Remove Mask for processing .... see if this is necessary
@@ -50,22 +51,22 @@ class Adjustment():
             final_mask = new_face[:, :, -1:]
             new_face = new_face[:, :, :3]
 
-        old_face_color = self.convert_colorspace(old_face[None, ...], to_bgr=False)
-        new_face_color = self.convert_colorspace(new_face[None, ...], to_bgr=False)
+        old_face_color = self.convert_colorspace(old_face[None, ...], color_method, to_bgr=False)
+        new_face_color = self.convert_colorspace(new_face[None, ...], color_method, to_bgr=False)
         mask = np.concatenate((raw_mask, raw_mask, raw_mask), axis=-1)[None, ...]
         new_face_shifted = self.process(old_face_color, new_face_color, mask)
-        new_face_shifted = self.convert_colorspace(new_face_shifted, to_bgr=True)
+        new_face_shifted = self.convert_colorspace(new_face_shifted, color_method, to_bgr=True)
         new_face_shifted = self.clip_image(new_face_shifted)[0]
-
+        # self._histogram_compare(old_face, new_face, new_face_shifted, raw_mask)
         if reinsert_mask and new_face.shape[2] != 4:
             new_face_shifted = np.concatenate((new_face_shifted, final_mask), axis=-1)
         logger.trace("Performed color adjustment")
         return new_face_shifted
 
-    def convert_colorspace(self, new_face, to_bgr=False):
+    def convert_colorspace(self, new_face, color_method, to_bgr=False):
         """ Convert colorspace based on mode or back to BGR """
-        mode = self.config.get("colorspace", "Lab")
-        colorspace = "YCrCb" if mode == "Ycrcb" else mode.upper()
+        mode = self.config.get(color_method + "-colorspace", "Lab")
+        colorspace = "YCrCb" if mode == "YCrCb" else mode.upper()
         conversion = "{}2BGR".format(colorspace) if to_bgr else "BGR2{}".format(colorspace)
         image = batch_convert_color(new_face, conversion)
         return image
@@ -105,3 +106,37 @@ class Adjustment():
         else:
             logger.trace("Insert Faceswap Error code here")
         return image
+
+    @staticmethod
+    def _histogram_compare(old_face, new_face, new_face_shifted, raw_mask):
+        """
+        Perform either clipping or min-max scaling to a NumPy array
+
+        Parameters:
+        -------
+        old_face : Numpy array, shape (n_images, height, width, n_channels), float32
+            Facial crop of the original subject
+        new_face : Numpy array, shape (n_images, height, width, n_channels), float32
+            Facial crop of the swapped output from the neural network
+        """
+        images = [old_face, new_face, new_face_shifted]
+        names = ['old_face', 'new_face', 'new_face_shifted']
+        markers = ["None","None","*"]
+        linestyles = ["solid","dotted","None"]
+        colors = ["blue", "green", "red"]
+        channels = range(old_face.shape[-1])
+        pixel_number = old_face.shape[0] * old_face.shape[1]
+        plt.figure()
+        plt.title("Color Histogram")
+        plt.xlabel("Pixel Intensity")
+        plt.ylabel("Prob. of Pixels")
+         
+        mask = np.rint(raw_mask).astype("uint8")
+        for (image, marker, linestyle, name) in zip(images, markers, linestyles, names):
+            for (color, channel) in zip(colors, channels):
+                hist = cv2.calcHist([image], channels=[channel], mask=mask, histSize=[256], ranges=[0.0, 1.0], accumulate=False)
+                hist /= pixel_number
+                plt.plot(hist, color = color, marker=marker, markersize=6, markeredgecolor=color, linestyle = linestyle, label=name)
+        plt.xlim([0, 256])
+        plt.legend()
+        plt.savefig('compare.png')

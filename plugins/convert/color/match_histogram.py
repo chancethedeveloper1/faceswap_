@@ -32,12 +32,13 @@ class Color(Adjustment):
         channels = range(new_face.shape[-1])
         new_face_shifted = np.empty_like(new_face)
         for index, (old_img, new_img, mask) in enumerate(zip(old_face, new_face, raw_mask)):
-            mask_indices = np.nonzero(mask)
+            mask_indices = np.nonzero(mask)[:2]
             for channel in channels:
                 new_face_shifted[index, :, :, channel] = self._hist_match(old_img[:, :, channel],
                                                                           new_img[:, :, channel],
                                                                           mask_indices,
                                                                           threshold)
+            print(type(mask_indices))
         return new_face_shifted
 
     @staticmethod

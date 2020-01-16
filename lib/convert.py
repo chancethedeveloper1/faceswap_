@@ -276,7 +276,7 @@ class Converter():
         new_face = self._adjustments["box"].run(new_face)
         new_face, raw_mask = self._get_image_mask(new_face, detected_face, predicted_mask)
         if self._adjustments["color"] is not None:
-            new_face = self._adjustments["color"].run(old_face, new_face, raw_mask)
+            new_face = self._adjustments["color"].run(old_face, new_face, raw_mask, self._args.color_adjustment)
         if self._adjustments["seamless"] is not None:
             new_face = self._adjustments["seamless"].run(old_face, new_face, raw_mask)
         logger.trace("returning: new_face shape %s", new_face.shape)

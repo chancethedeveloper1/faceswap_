@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """
-    The default options for the faceswap Seamless_Clone Color plugin.
-
+    The default options for the faceswap Color_Transfer Color plugin.
     Defaults files should be named <plugin_name>_defaults.py
     Any items placed into this file will automatically get added to the relevant config .ini files
     within the faceswap/config folder.
-
     The following variables should be defined:
         _HELPTEXT: A string describing what this plugin does
         _DEFAULTS: A dictionary containing the options, defaults and meta information. The
                    dictionary should be defined as:
                        {<option_name>: {<metadata>}}
-
                    <option_name> should always be lower text.
                    <metadata> dictionary requirements are listed below.
-
     The following keys are expected for the _DEFAULTS <metadata> dict:
         datatype:  [required] A python type class. This limits the type of data that can be
                    provided in the .ini file and ensures that the value is returned in the
@@ -41,11 +37,16 @@
 """
 
 
-_HELPTEXT = "Options for implemnting a Poisson Blending on the borders of the segmentation mask"
+_HELPTEXT = (
+    "Options for transfering the color distribution from the source to the target image using the "
+    "mean and standard deviations of the L*a*b* color space.\nThis implementation is (loosely) "
+    "based on the 'Color Transfer between Images' paper by Reinhard et al., 2001. matching the "
+    "histograms between the source and destination faces."
+)
 
 
 _DEFAULTS = {
-    "colorspace": {
+    "color-transfer-colorspace": {
         "default": "LAB",
         "choices": ["RGB", "LAB", "YCrCb"],
         "info": "Transform neural network output into the above colorspace before "
@@ -76,7 +77,7 @@ _DEFAULTS = {
         "gui_radio": True,
         "fixed": True,
     },
-    "overflow correction": {
+    "color-transfer-overflow correction": {
         "default": "clip",
         "choices": ["clip", "scale", "none"],
         "info": "Post-processing will commonly adjust channel intensity values outside of the "
@@ -91,6 +92,36 @@ _DEFAULTS = {
         "rounding": None,
         "min_max": None,
         "gui_radio": True,
+        "fixed": True,
+    },
+    "clip": {
+        "default": True,
+        "info": "Should components of L*a*b* image be scaled by np.clip before converting "
+                "back to BGR color space?\nIf False then components will be min-max scaled "
+                "appropriately.\nClipping will keep target image brightness truer to the "
+                "input.\nScaling will adjust image brightness to avoid washed out portions in "
+                "the resulting color transfer that can be caused by clipping.",
+        "datatype": bool,
+        "group": "method",
+        "rounding": None,
+        "min_max": None,
+        "choices": [],
+        "gui_radio": False,
+        "fixed": True,
+    },
+    "preserve_paper": {
+        "default": True,
+        "info": "Should color transfer strictly follow methodology layed out in original "
+                "paper?\nThe method does not always produce aesthetically pleasing results.\n"
+                "If False then L*a*b* components will be scaled using the reciprocal of the "
+                "scaling factor proposed in the paper. This method seems to produce more "
+                "consistently aesthetically pleasing results.",
+        "datatype": bool,
+        "group": "method",
+        "rounding": None,
+        "min_max": None,
+        "choices": [],
+        "gui_radio": False,
         "fixed": True,
     },
 }

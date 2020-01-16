@@ -41,14 +41,13 @@
 """
 
 
-_HELPTEXT = "Options for matching the mean, variance, and skew of the pixel intensity of the "
-            "original face"
+_HELPTEXT = "Options for matching the mean, variance, and skew of the pixel intensity of the original face"
 
 
 _DEFAULTS = {
-    "colorspace": {
+    "match-skew-colorspace": {
         "default": "LAB",
-        "choices": ["RGB", "LAB", "HSV", "YCrCb"],
+        "choices": ["RGB", "LAB", "YCrCb"],
         "info": "Transform neural network output into the above colorspace before "
                 "performing post-processing corrections."
                 "\n\t RGB: Red, Green, Blue. An additive colorspace consisting of a linear "
@@ -63,14 +62,6 @@ _DEFAULTS = {
                 "to acheive perceptual uniformity as channel intensity values change. Uses a "
                 "single channel to describe brightness (L), making it very intuitive to specify "
                 "color brightness."
-                "\n\t HSV: Hue, Saturation, Value."
-                " ... Hue - Dominant wavelength or similiarity to a perceived color."
-                " ... Saturation - colorfulness of a shade relative to its own brightness."
-                " ... Value - brightness relative to the brightness of a similarly illuminated "
-                "white."
-                " ... A transformation which compromises between effectiveness for segmentation "
-                "and computational complexity. Uses a single channel to describe color (H), "
-                "making it very intuitive to specify color hue."
                 "\n\t YCrCb: Luma, Chroma red-differnce, Chroma blue-difference."
                 " ... Y - Luma component (weighted RGB without gamma correction)."
                 " ... Cr - Difference between the R channel and the Luma magnitude."
@@ -85,7 +76,7 @@ _DEFAULTS = {
         "gui_radio": True,
         "fixed": True,
     },
-    "overflow correction": {
+    "match-skew-overflow correction": {
         "default": "clip",
         "choices": ["clip", "scale", "none"],
         "info": "Post-processing will commonly adjust channel intensity values outside of the "
