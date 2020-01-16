@@ -33,7 +33,7 @@ class Color(Adjustment):
     between Images" paper by Reinhard et al., 2001.
     """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, mask):
         """
         Parameters:
         -------
@@ -64,10 +64,10 @@ class Color(Adjustment):
         # sure to utilizing the floating point data type (note: OpenCV
         # expects floats to be 32-bit, so use that instead of 64-bit)
         source = cv2.cvtColor(  # pylint: disable=no-member
-            np.rint(old_face[0][:,:,::-1] * raw_mask[0] * 255.0).astype("uint8"),
+            np.rint(old_face[0][:,:,::-1] * mask[0] * 255.0).astype("uint8"),
             cv2.COLOR_BGR2LAB).astype("float32")  # pylint: disable=no-member
         target = cv2.cvtColor(  # pylint: disable=no-member
-            np.rint(new_face[0][:,:,::-1] * raw_mask[0] * 255.0).astype("uint8"),
+            np.rint(new_face[0][:,:,::-1] * mask[0] * 255.0).astype("uint8"),
             cv2.COLOR_BGR2LAB).astype("float32")  # pylint: disable=no-member
         # compute color statistics for the source and target images
         (l_mean_src, l_std_src,
@@ -112,7 +112,7 @@ class Color(Adjustment):
         transfer = cv2.cvtColor(  # pylint: disable=no-member
             transfer.astype("uint8"),
             cv2.COLOR_LAB2BGR).astype("float32") / 255.0  # pylint: disable=no-member
-        background = new_face[0] * (1 - raw_mask[0])
+        background = new_face[0] * (1 - mask[0])
         merged = transfer[:,:,::-1] + background
         print("end")
         # return the color transferred image

@@ -9,7 +9,7 @@ from ._base import Adjustment
 class Color(Adjustment):
     """ Poisson Blending of colors along mask boundary """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, mask):
         """
         Seamlessly merge the swapped facial crop into the original facial crop using Poisson
         Blending. The colors along the segmentation mask boundary will be shifted to produce
@@ -21,7 +21,7 @@ class Color(Adjustment):
             Facial crop of the original subject
         new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
+        mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
@@ -30,22 +30,22 @@ class Color(Adjustment):
             Facial crop of the swapped output with a shifted color distribution
         """
         new_face_shifted = np.empty_like(new_face)
-        for index, (old_img, new_img, mask) in enumerate(zip(old_face, new_face, raw_mask)):
-            new_face_shifted[index] = self._seamless_clone(old_img, new_img, mask)
+        for index, (old_img, new_img, img_mask) in enumerate(zip(old_face, new_face, mask)):
+            new_face_shifted[index] = self._seamless_clone(old_img, new_img, img_mask)
         return new_face_shifted
 
     @staticmethod
-    def _seamless_clone(old_face, new_face, raw_mask):
+    def _seamless_clone(old_face, new_face, mask):
         """  Clone each image seperately """
         height, width, _ = old_face.shape
-        y_indices, x_indices, _ = np.nonzero(raw_mask)
+        y_indices, x_indices, _ = np.nonzero(mask)
         y_crop = slice(np.min(y_indices), np.max(y_indices))
         x_crop = slice(np.min(x_indices), np.max(x_indices))
         y_center = int(np.rint((np.max(y_indices) + np.min(y_indices) + height) / 2.0))
         x_center = int(np.rint((np.max(x_indices) + np.min(x_indices) + width) / 2.0))
 
         insertion_image = np.rint(new_face[y_crop, x_crop] * 255.0).astype("uint8")
-        insertion_mask = np.rint(raw_mask[y_crop, x_crop] * 255.0).astype("uint8")
+        insertion_mask = np.rint(mask[y_crop, x_crop] * 255.0).astype("uint8")
         insertion_mask[insertion_mask != 0] = 255
         height = height // 2
         width = width // 2

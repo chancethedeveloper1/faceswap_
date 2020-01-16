@@ -8,7 +8,7 @@ from ._base import Adjustment
 class Color(Adjustment):
     """ Match the histogram of the color intensity of each image channel """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, mask):
         """
         Calculate the histogram of each color channel in the original facial crop and the
         swapped facial crop. Shift the histogram of the swap to align with the histogram of the
@@ -20,7 +20,7 @@ class Color(Adjustment):
             Facial crop of the original subject
         new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
+        mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
@@ -31,8 +31,8 @@ class Color(Adjustment):
         threshold = self.config["threshold"]
         channels = range(new_face.shape[-1])
         new_face_shifted = np.empty_like(new_face)
-        for index, (old_img, new_img, mask) in enumerate(zip(old_face, new_face, raw_mask)):
-            mask_indices = np.nonzero(mask)[:2]
+        for index, (old_img, new_img, img_mask) in enumerate(zip(old_face, new_face, mask)):
+            mask_indices = np.nonzero(img_mask)[:2]
             for channel in channels:
                 new_face_shifted[index, :, :, channel] = self._hist_match(old_img[:, :, channel],
                                                                           new_img[:, :, channel],

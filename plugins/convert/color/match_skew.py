@@ -9,7 +9,7 @@ from ._base import Adjustment
 class Color(Adjustment):
     """ Color distribution shifting using an optimized power transform """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, mask):
         """
         Remap swapped_images to the source_images' color distribution accounting for the skewed
         color distribution
@@ -20,7 +20,7 @@ class Color(Adjustment):
             Facial crop of the original subject whose color distributions are to be matched
         new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
+        mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
@@ -31,7 +31,7 @@ class Color(Adjustment):
         channels = range(new_face.shape[-1])
         old_faces = np.concatenate([old_face[..., channel] for channel in channels], axis=0)
         new_faces = np.concatenate([new_face[..., channel] for channel in channels], axis=0)
-        masks = np.concatenate([raw_mask[..., channel] for channel in channels], axis=0)
+        masks = np.concatenate([mask[..., channel] for channel in channels], axis=0)
         new_face_shifted = new_faces.copy()
         for index, (old, new, mask) in enumerate(zip(old_faces, new_faces, masks)):
             select = (mask >= 0.5)

@@ -8,7 +8,7 @@ from ._base import Adjustment
 class Color(Adjustment):
     """ Color distribution adjustment """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, mask):
         """
         Shift the color distribution of the swapped facial crop by an user input amount.
 
@@ -18,7 +18,7 @@ class Color(Adjustment):
             Facial crop of the original subject
         new_face : Numpy array, shape (n_images, height, width, n_channels), float32
             Facial crop of the swapped output from the neural network
-        raw_mask : Numpy array, shape (n_images, height, width, n_channels), float32
+        mask : Numpy array, shape (n_images, height, width, n_channels), float32
             Segmentation mask of the facial crop of the original subject
 
         Returns:
