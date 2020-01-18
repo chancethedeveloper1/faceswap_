@@ -33,8 +33,8 @@ class Color(Adjustment):
         new_faces = np.concatenate([new_face[..., channel] for channel in channels], axis=0)
         masks = np.concatenate([mask[..., channel] for channel in channels], axis=0)
         new_face_shifted = new_faces.copy()
-        for index, (old, new, mask) in enumerate(zip(old_faces, new_faces, masks)):
-            select = (mask >= 0.5)
+        for index, (old, new, img_mask) in enumerate(zip(old_faces, new_faces, masks)):
+            select = (img_mask >= 0.5)
             source_lambdas = self._yeo_johnson_optimize(old[select])
             swapped_lambdas = self._yeo_johnson_optimize(new[select])
             origs = self._yeo_johnson_transform(old[select], source_lambdas)
@@ -44,6 +44,7 @@ class Color(Adjustment):
             new_face_shifted[index][select] = self._yeo_johnson_inverse_transform(shifted_swaps,
                                                                                   source_lambdas)
         new_face_shifted = np.stack(new_face_shifted, axis=-1)[None, ...]
+        new_face_shifted = new_face_shifted * mask + new_face * (1.0 - mask)
         return new_face_shifted
 
     def _yeo_johnson_optimize(self, images):

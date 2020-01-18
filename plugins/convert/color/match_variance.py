@@ -42,4 +42,5 @@ class Color(Adjustment):
         # there is no "preserve paper" as Reinhard's math always uses (old_face_std / new_face_std)
         # must have been confusion due to the terminology of "source" and "target" in the paper
         new_face_shifted = (new_face - new_mean) * (old_std / new_std) + (old_mean)
+        new_face_shifted = new_face_shifted * mask + new_face * (1.0 - mask)
         return new_face_shifted

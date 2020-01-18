@@ -44,10 +44,10 @@ class Adjustment():
     def run(self, old_face, new_face, color_method):
         """ Perform selected adjustment on facial crops """
         logger.trace("Performing color adjustment")
+        print(np.average(new_face, axis=(0,1,2)))
         old_face_color = self.convert_colorspace(old_face[None, :, :, :3], color_method, to_bgr=False)
         new_face_color = self.convert_colorspace(new_face[None, :, :, :3], color_method, to_bgr=False)
         mask = np.concatenate((new_face[:, :, -1:], new_face[:, :, -1:], new_face[:, :, -1:]), axis=-1)[None, ...]
-
         new_face_shifted = self.process(old_face_color, new_face_color, mask)
         new_face_shifted = self.convert_colorspace(new_face_shifted, color_method, to_bgr=True)
         new_face_shifted = self.clip_image(new_face_shifted)

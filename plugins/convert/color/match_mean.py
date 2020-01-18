@@ -30,4 +30,5 @@ class Color(Adjustment):
         """
         adjustment = np.average(old_face - new_face, axis=(1, 2), weights=mask)
         new_face_shifted = new_face + adjustment
+        new_face_shifted = new_face_shifted * mask + new_face * (1.0 - mask)
         return new_face_shifted

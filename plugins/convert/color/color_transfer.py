@@ -114,7 +114,6 @@ class Color(Adjustment):
             cv2.COLOR_LAB2BGR).astype("float32") / 255.0  # pylint: disable=no-member
         background = new_face[0] * (1 - mask[0])
         merged = transfer[:,:,::-1] + background
-        print("end")
         # return the color transferred image
         return merged[None, ...]
 

@@ -44,12 +44,17 @@ class Color(Adjustment):
         y_center = int(np.rint((np.max(y_indices) + np.min(y_indices) + height) / 2.0))
         x_center = int(np.rint((np.max(x_indices) + np.min(x_indices) + width) / 2.0))
 
-        insertion_image = np.rint(new_face[y_crop, x_crop] * 255.0).astype("uint8")
-        insertion_mask = np.rint(mask[y_crop, x_crop] * 255.0).astype("uint8")
-        insertion_mask[insertion_mask != 0] = 255
+        insertion_image = np.rint(new_face[y_crop, x_crop].copy()).astype("uint8")
+        insertion_mask = np.zeros(mask[y_crop, x_crop].shape, dtype="uint8")
+        insertion_mask[mask[y_crop, x_crop] > 0.05] = 255
+        insertion_mask_fill = insertion_mask.copy()
+        mask_height, mask_width = insertion_mask.shape[:2]
+        zero_mask = np.zeros((mask_height + 2, mask_width + 2), dtype="uint8")
+        cv2.floodFill(insertion_mask_fill, zero_mask, (0, 0), 255)
+        insertion_mask = insertion_mask | cv2.bitwise_not(insertion_mask_fill)
         height = height // 2
         width = width // 2
-        background_image = np.rint(np.pad(old_face * 255.0,
+        background_image = np.rint(np.pad(old_face,
                                           ((height, height), (width, width), (0, 0)),
                                           'constant')).astype("uint8")
 
@@ -58,5 +63,6 @@ class Color(Adjustment):
                                          insertion_mask,
                                          (x_center, y_center),
                                          cv2.NORMAL_CLONE)
-        new_face_shifted = padded_image[height:-height, width:-width].astype("float32") / 255.0
+        new_face_shifted = padded_image[height:-height, width:-width].astype("float32")
+        #new_face_shifted = new_face_shifted * mask + new_face * (1.0 - mask)
         return new_face_shifted

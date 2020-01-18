@@ -38,7 +38,7 @@ class Color(Adjustment):
                                                                           new_img[:, :, channel],
                                                                           mask_indices,
                                                                           threshold)
-            print(type(mask_indices))
+
         return new_face_shifted
 
     @staticmethod
